@@ -1,0 +1,17 @@
+name: Dependency Submission
+
+on:
+  push:
+    branches: [ 'main' ]
+
+permissions:
+  contents: write
+
+jobs:
+  dependency-submission:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@5a4ac9002d0be2fb38bd78e4b4dbde5606d7042f # 2.3.4
+      - name: Generate and submit dependency graph
+        uses: gradle/actions/dependency-submission@db19848a5fa7950289d3668fb053140cf3028d43 #v3.3.2
