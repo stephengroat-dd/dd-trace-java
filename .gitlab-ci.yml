@@ -18,7 +18,6 @@ stages:
 
 variables:
   REGISTRY: 486234852809.dkr.ecr.us-east-1.amazonaws.com
-  SONATYPE_USERNAME: robot-sonatype-apm-java
   DOWNSTREAM_BRANCH:
     value: "master"
     description: "Run a specific datadog-reliability-env branch downstream"
@@ -184,11 +183,13 @@ deploy_to_sonatype:
   rules:
     - if: '$CI_COMMIT_BRANCH == "master"'
       when: on_success
-    - if: '$CI_COMMIT_TAG =~ /^v.*/'
+    # Do not deploy release candidate versions
+    - if: '$CI_COMMIT_TAG =~ /^v[0-9]+\.[0-9]+\.[0-9]+$/'
       when: on_success
     - when: manual
       allow_failure: true
   script:
+    - export SONATYPE_USERNAME=$(aws ssm get-parameter --region us-east-1 --name ci.dd-trace-java.sonatype_username --with-decryption --query "Parameter.Value" --out text)
     - export SONATYPE_PASSWORD=$(aws ssm get-parameter --region us-east-1 --name ci.dd-trace-java.sonatype_password --with-decryption --query "Parameter.Value" --out text)
     - export GPG_PRIVATE_KEY=$(aws ssm get-parameter --region us-east-1 --name ci.dd-trace-java.signing.gpg_private_key --with-decryption --query "Parameter.Value" --out text)
     - export GPG_PASSWORD=$(aws ssm get-parameter --region us-east-1 --name ci.dd-trace-java.signing.gpg_passphrase --with-decryption --query "Parameter.Value" --out text)
@@ -205,6 +206,12 @@ deploy_artifacts_to_github:
       when: on_success
     - when: manual
       allow_failure: true
+  # Requires the deploy_to_sonatype job to have run first as build cache is broken
+  # This will deploy the artifacts built from the publishToSonatype task to the GitHub release
+  needs:
+    - job: deploy_to_sonatype
+      # The deploy_to_sonatype job is not run for release candidate versions
+      optional: true
   script:
     - aws ssm get-parameter --region us-east-1 --name ci.dd-trace-java.gh_release_token --with-decryption --query "Parameter.Value" --out text > github-token.txt
     - gh auth login --with-token < github-token.txt
@@ -213,47 +220,41 @@ deploy_artifacts_to_github:
     - gh release upload --clobber --repo DataDog/dd-trace-java $CI_COMMIT_TAG workspace/dd-java-agent/build/libs/*.jar
     - gh release upload --clobber --repo DataDog/dd-trace-java $CI_COMMIT_TAG workspace/dd-trace-api/build/libs/*.jar
     - gh release upload --clobber --repo DataDog/dd-trace-java $CI_COMMIT_TAG workspace/dd-trace-ot/build/libs/*.jar
-    
-deploy_to_docker_registries:
-  stage: deploy
-  rules:
-    - if: '$CI_COMMIT_TAG =~ /.*-[Rr][Cc].*/'
-      when: manual
-      allow_failure: true
-    - if: '$POPULATE_CACHE'
-      when: never
-    - if: '$CI_COMMIT_TAG =~ /^v.*/'
-      when: on_success
-    - when: manual
-      allow_failure: true
-  trigger:
-    project: DataDog/public-images
-    branch: main
-    strategy: depend
-  variables:
-    IMG_SOURCES: ghcr.io/datadog/dd-trace-java/dd-lib-java-init:$CI_COMMIT_SHA
-    IMG_DESTINATIONS: dd-lib-java-init:$CI_COMMIT_TAG
-    IMG_SIGNING: "false"
 
-deploy_latest_tag_to_docker_registries:
+generate-lib-init-tag-values:
+  tags: ["arch:amd64"]
+  image: registry.ddbuild.io/ci/auto_inject/gitlab:current
   stage: deploy
   rules:
-    - if: '$CI_COMMIT_TAG =~ /.*-[Rr][Cc].*/'
-      when: manual
-      allow_failure: true
     - if: '$POPULATE_CACHE'
       when: never
-    - if: '$CI_COMMIT_TAG =~ /^v1\..*/'
+    # Do not tag release candidate versions
+    - if: '$CI_COMMIT_TAG =~ /^v[0-9]+\.[0-9]+\.[0-9]+$/'
       when: on_success
     - when: manual
       allow_failure: true
+  variables:
+    IMG_DESTINATION_BASE: dd-lib-java-init
+  script:
+    - .gitlab/build-lib-init.sh
+  artifacts:
+    reports:
+      dotenv: build.env
+
+deploy-lib-init-trigger:
+  stage: deploy
+  # needs the version from the generate-tag-values job
+  needs:
+    - job: generate-lib-init-tag-values
+      artifacts: true
   trigger:
+#    project: DataDog/dd-trace-dotnet-gitlab-test # can be used for testing
     project: DataDog/public-images
     branch: main
     strategy: depend
   variables:
     IMG_SOURCES: ghcr.io/datadog/dd-trace-java/dd-lib-java-init:$CI_COMMIT_SHA
-    IMG_DESTINATIONS: dd-lib-java-init:latest
+    IMG_DESTINATIONS: $IMG_DESTINATIONS
     IMG_SIGNING: "false"
 
 create_key:

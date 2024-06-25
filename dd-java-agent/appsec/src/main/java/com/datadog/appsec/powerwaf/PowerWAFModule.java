@@ -14,9 +14,8 @@ import com.datadog.appsec.event.data.DataBundle;
 import com.datadog.appsec.event.data.KnownAddresses;
 import com.datadog.appsec.gateway.AppSecRequestContext;
 import com.datadog.appsec.report.AppSecEvent;
-import com.datadog.appsec.report.Parameter;
-import com.datadog.appsec.report.Rule;
-import com.datadog.appsec.report.RuleMatch;
+import com.datadog.appsec.stack_trace.StackTraceEvent;
+import com.datadog.appsec.stack_trace.StackTraceEvent.Frame;
 import com.datadog.appsec.util.StandardizedLogging;
 import com.squareup.moshi.JsonAdapter;
 import com.squareup.moshi.Moshi;
@@ -27,6 +26,9 @@ import datadog.trace.api.ProductActivation;
 import datadog.trace.api.gateway.Flow;
 import datadog.trace.api.telemetry.LogCollector;
 import datadog.trace.api.telemetry.WafMetricCollector;
+import datadog.trace.bootstrap.instrumentation.api.AgentSpan;
+import datadog.trace.bootstrap.instrumentation.api.AgentTracer;
+import datadog.trace.util.stacktrace.StackWalkerFactory;
 import io.sqreen.powerwaf.Additive;
 import io.sqreen.powerwaf.Powerwaf;
 import io.sqreen.powerwaf.PowerwafConfig;
@@ -43,7 +45,6 @@ import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
 import java.lang.reflect.UndeclaredThrowableException;
-import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
@@ -59,6 +60,7 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 import javax.annotation.Nonnull;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -77,6 +79,8 @@ public class PowerWAFModule implements AppSecModule {
   private static final JsonAdapter<List<PowerWAFResultData>> RES_JSON_ADAPTER;
 
   private static final Map<String, ActionInfo> DEFAULT_ACTIONS;
+
+  private static final String EXPLOIT_DETECTED_MSG = "Exploit detected";
 
   private static class ActionInfo {
     final String type;
@@ -368,6 +372,8 @@ public class PowerWAFModule implements AppSecModule {
     addressList.add(KnownAddresses.RESPONSE_HEADERS_NO_COOKIES);
     addressList.add(KnownAddresses.RESPONSE_BODY_OBJECT);
     addressList.add(KnownAddresses.GRAPHQL_SERVER_ALL_RESOLVERS);
+    addressList.add(KnownAddresses.DB_TYPE);
+    addressList.add(KnownAddresses.DB_SQL_QUERY);
 
     return addressList;
   }
@@ -425,11 +431,14 @@ public class PowerWAFModule implements AppSecModule {
           if ("block_request".equals(actionInfo.type)) {
             Flow.Action.RequestBlockingAction rba = createBlockRequestAction(actionInfo);
             flow.setAction(rba);
-            break;
           } else if ("redirect_request".equals(actionInfo.type)) {
             Flow.Action.RequestBlockingAction rba = createRedirectRequestAction(actionInfo);
             flow.setAction(rba);
-            break;
+          } else if ("generate_stack".equals(actionInfo.type)
+              && Config.get().isAppSecStackTraceEnabled()) {
+            String stackId = (String) actionInfo.parameters.get("stack_id");
+            StackTraceEvent stackTraceEvent = createExploitStackTraceEvent(stackId);
+            reqCtx.reportStackTrace(stackTraceEvent);
           } else {
             log.info("Ignoring action with type {}", actionInfo.type);
           }
@@ -497,6 +506,32 @@ public class PowerWAFModule implements AppSecModule {
       }
     }
 
+    private StackTraceEvent createExploitStackTraceEvent(String stackId) {
+      if (stackId == null || stackId.isEmpty()) {
+        return null;
+      }
+      List<Frame> result = generateUserCodeStackTrace();
+      return new StackTraceEvent(stackId, EXPLOIT_DETECTED_MSG, result);
+    }
+
+    /** Function generates stack trace of the user code (excluding datadog classes) */
+    private List<Frame> generateUserCodeStackTrace() {
+      int stackCapacity = Config.get().getAppSecMaxStackTraceDepth();
+      List<StackTraceElement> elements =
+          StackWalkerFactory.INSTANCE.walk(
+              stream ->
+                  stream
+                      .filter(
+                          elem ->
+                              !elem.getClassName().startsWith("com.datadog")
+                                  && !elem.getClassName().startsWith("datadog.trace"))
+                      .limit(stackCapacity)
+                      .collect(Collectors.toList()));
+      return IntStream.range(0, elements.size())
+          .mapToObj(idx -> new Frame(elements.get(idx), idx))
+          .collect(Collectors.toList());
+    }
+
     private Powerwaf.ResultWithData doRunPowerwaf(
         AppSecRequestContext reqCtx,
         DataBundle newData,
@@ -553,39 +588,17 @@ public class PowerWAFModule implements AppSecModule {
       return null;
     }
 
-    List<RuleMatch> ruleMatchList = new ArrayList<>();
-    for (PowerWAFResultData.RuleMatch rule_match : wafResult.rule_matches) {
-
-      List<Parameter> parameterList = new ArrayList<>();
-
-      for (PowerWAFResultData.Parameter parameter : rule_match.parameters) {
-        parameterList.add(
-            new Parameter.Builder()
-                .withAddress(parameter.address)
-                .withKeyPath(parameter.key_path)
-                .withValue(parameter.value)
-                .withHighlight(parameter.highlight)
-                .build());
-      }
-
-      RuleMatch ruleMatch =
-          new RuleMatch.Builder()
-              .withOperator(rule_match.operator)
-              .withOperatorValue(rule_match.operator_value)
-              .withParameters(parameterList)
-              .build();
-
-      ruleMatchList.add(ruleMatch);
+    Long spanId = null;
+    AgentSpan agentSpan = AgentTracer.get().activeSpan();
+    if (agentSpan != null) {
+      spanId = agentSpan.getSpanId();
     }
 
     return new AppSecEvent.Builder()
-        .withRule(
-            new Rule.Builder()
-                .withId(wafResult.rule.id)
-                .withName(wafResult.rule.name)
-                .withTags(wafResult.rule.tags)
-                .build())
-        .withRuleMatches(ruleMatchList)
+        .withRule(wafResult.rule)
+        .withRuleMatches(wafResult.rule_matches)
+        .withSpanId(spanId)
+        .withStackId(wafResult.stack_id)
         .build();
   }
 

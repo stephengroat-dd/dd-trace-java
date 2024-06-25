@@ -14,6 +14,7 @@ import datadog.trace.api.civisibility.config.TestIdentifier
 import datadog.trace.api.civisibility.coverage.CoverageBridge
 import datadog.trace.api.civisibility.events.TestEventsHandler
 import datadog.trace.api.civisibility.telemetry.CiVisibilityMetricCollector
+import datadog.trace.api.civisibility.telemetry.tag.Provider
 import datadog.trace.api.config.CiVisibilityConfig
 import datadog.trace.api.config.GeneralConfig
 import datadog.trace.bootstrap.ContextStore
@@ -76,7 +77,7 @@ abstract class CiVisibilityInstrumentationTest extends AgentTestRunner {
     def rootPath = currentPath.parent
     dummyModule = rootPath.relativize(currentPath)
 
-    def supportedCiProvider = true
+    def ciProvider = Provider.GITHUBACTIONS
 
     def metricCollector = Stub(CiVisibilityMetricCollectorImpl)
 
@@ -99,7 +100,9 @@ abstract class CiVisibilityInstrumentationTest extends AgentTestRunner {
         (CiVisibilityConfig.CIVISIBILITY_FLAKY_RETRY_ENABLED)          : String.valueOf(flakyRetryEnabled),
         (CiVisibilityConfig.CIVISIBILITY_EARLY_FLAKE_DETECTION_ENABLED): String.valueOf(earlyFlakinessDetectionEnabled)
       ]
-      return new ModuleExecutionSettings(false,
+      return new ModuleExecutionSettings(
+      itrEnabled,
+      false,
       itrEnabled,
       flakyRetryEnabled,
       earlyFlakinessDetectionEnabled
@@ -125,7 +128,7 @@ abstract class CiVisibilityInstrumentationTest extends AgentTestRunner {
       return new HeadlessTestSession(
       projectName,
       startTime,
-      supportedCiProvider,
+      ciProvider,
       Config.get(),
       metricCollector,
       testDecorator,
@@ -150,7 +153,7 @@ abstract class CiVisibilityInstrumentationTest extends AgentTestRunner {
       rootPath.toString(),
       startCommand,
       startTime,
-      supportedCiProvider,
+      ciProvider,
       Config.get(),
       metricCollector,
       testModuleRegistry,

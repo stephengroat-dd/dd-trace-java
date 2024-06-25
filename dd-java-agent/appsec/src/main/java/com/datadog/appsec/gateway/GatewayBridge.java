@@ -19,8 +19,9 @@ import com.datadog.appsec.event.data.ObjectIntrospection;
 import com.datadog.appsec.event.data.SingletonDataBundle;
 import com.datadog.appsec.report.AppSecEvent;
 import com.datadog.appsec.report.AppSecEventWrapper;
+import com.datadog.appsec.stack_trace.StackTraceCollection;
+import com.datadog.appsec.util.ObjectFlattener;
 import datadog.trace.api.Config;
-import datadog.trace.api.DDTags;
 import datadog.trace.api.function.TriConsumer;
 import datadog.trace.api.function.TriFunction;
 import datadog.trace.api.gateway.Events;
@@ -79,9 +80,12 @@ public class GatewayBridge {
   private volatile DataSubscriberInfo requestBodySubInfo;
   private volatile DataSubscriberInfo pathParamsSubInfo;
   private volatile DataSubscriberInfo respDataSubInfo;
+  private volatile DataSubscriberInfo grpcServerMethodSubInfo;
   private volatile DataSubscriberInfo grpcServerRequestMsgSubInfo;
   private volatile DataSubscriberInfo graphqlServerRequestMsgSubInfo;
   private volatile DataSubscriberInfo requestEndSubInfo;
+  private volatile DataSubscriberInfo dbConnectionSubInfo;
+  private volatile DataSubscriberInfo dbSqlQuerySubInfo;
 
   public GatewayBridge(
       SubscriptionService subscriptionService,
@@ -142,7 +146,7 @@ public class GatewayBridge {
               if (!collectedEvents.isEmpty()) {
                 // Keep event related span, because it could be ignored in case of
                 // reduced datadog sampling rate.
-                traceSeg.setTagTop(DDTags.MANUAL_KEEP, true);
+                traceSeg.setTagTop(Tags.ASM_KEEP, true);
                 traceSeg.setTagTop("appsec.event", true);
                 traceSeg.setTagTop("network.client.ip", ctx.getPeerAddress());
 
@@ -160,6 +164,16 @@ public class GatewayBridge {
                 writeRequestHeaders(traceSeg, REQUEST_HEADERS_ALLOW_LIST, ctx.getRequestHeaders());
                 writeResponseHeaders(
                     traceSeg, RESPONSE_HEADERS_ALLOW_LIST, ctx.getResponseHeaders());
+
+                // Report collected stack traces
+                StackTraceCollection stackTraceCollection = ctx.transferStackTracesCollection();
+                if (stackTraceCollection != null) {
+                  Object flatStruct = ObjectFlattener.flatten(stackTraceCollection);
+                  if (flatStruct != null) {
+                    traceSeg.setMetaStructTop("_dd.stack", flatStruct);
+                  }
+                }
+
               } else if (hasUserTrackingEvent(traceSeg)) {
                 // Report all collected request headers on user tracking event
                 writeRequestHeaders(traceSeg, REQUEST_HEADERS_ALLOW_LIST, ctx.getRequestHeaders());
@@ -360,6 +374,32 @@ public class GatewayBridge {
         });
 
     subscriptionService.registerCallback(
+        EVENTS.grpcServerMethod(),
+        (ctx_, method) -> {
+          AppSecRequestContext ctx = ctx_.getData(RequestContextSlot.APPSEC);
+          if (ctx == null || method == null || method.isEmpty()) {
+            return NoopFlow.INSTANCE;
+          }
+          while (true) {
+            DataSubscriberInfo subInfo = grpcServerMethodSubInfo;
+            if (subInfo == null) {
+              subInfo = producerService.getDataSubscribers(KnownAddresses.GRPC_SERVER_METHOD);
+              grpcServerMethodSubInfo = subInfo;
+            }
+            if (subInfo == null || subInfo.isEmpty()) {
+              return NoopFlow.INSTANCE;
+            }
+            DataBundle bundle =
+                new SingletonDataBundle<>(KnownAddresses.GRPC_SERVER_METHOD, method);
+            try {
+              return producerService.publishDataEvent(subInfo, ctx, bundle, true);
+            } catch (ExpiredSubscriberInfoException e) {
+              grpcServerMethodSubInfo = null;
+            }
+          }
+        });
+
+    subscriptionService.registerCallback(
         EVENTS.grpcServerRequestMessage(),
         (ctx_, obj) -> {
           AppSecRequestContext ctx = ctx_.getData(RequestContextSlot.APPSEC);
@@ -410,6 +450,58 @@ public class GatewayBridge {
               return producerService.publishDataEvent(subInfo, ctx, bundle, true);
             } catch (ExpiredSubscriberInfoException e) {
               graphqlServerRequestMsgSubInfo = null;
+            }
+          }
+        });
+
+    subscriptionService.registerCallback(
+        EVENTS.databaseConnection(),
+        (ctx_, dbType) -> {
+          AppSecRequestContext ctx = ctx_.getData(RequestContextSlot.APPSEC);
+          if (ctx == null) {
+            return;
+          }
+          while (true) {
+            DataSubscriberInfo subInfo = dbConnectionSubInfo;
+            if (subInfo == null) {
+              subInfo = producerService.getDataSubscribers(KnownAddresses.DB_TYPE);
+              dbConnectionSubInfo = subInfo;
+            }
+            if (subInfo == null || subInfo.isEmpty()) {
+              return;
+            }
+            DataBundle bundle = new SingletonDataBundle<>(KnownAddresses.DB_TYPE, dbType);
+            try {
+              producerService.publishDataEvent(subInfo, ctx, bundle, false);
+              return;
+            } catch (ExpiredSubscriberInfoException e) {
+              dbConnectionSubInfo = null;
+            }
+          }
+        });
+
+    subscriptionService.registerCallback(
+        EVENTS.databaseSqlQuery(),
+        (ctx_, sql) -> {
+          AppSecRequestContext ctx = ctx_.getData(RequestContextSlot.APPSEC);
+          if (ctx == null) {
+            return;
+          }
+          while (true) {
+            DataSubscriberInfo subInfo = dbSqlQuerySubInfo;
+            if (subInfo == null) {
+              subInfo = producerService.getDataSubscribers(KnownAddresses.DB_SQL_QUERY);
+              dbSqlQuerySubInfo = subInfo;
+            }
+            if (subInfo == null || subInfo.isEmpty()) {
+              return;
+            }
+            DataBundle bundle = new SingletonDataBundle<>(KnownAddresses.DB_SQL_QUERY, sql);
+            try {
+              producerService.publishDataEvent(subInfo, ctx, bundle, false);
+              return;
+            } catch (ExpiredSubscriberInfoException e) {
+              dbSqlQuerySubInfo = null;
             }
           }
         });
