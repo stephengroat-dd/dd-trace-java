@@ -4,12 +4,36 @@ rulesets:
       array-is-stored-directly:
         ignore:
           - "**"
+      avoid-printstacktrace:
+        ignore:
+          - "buildSrc/**"
+          - "dd-java-agent/src/main/java/datadog/trace/bootstrap/**"
       avoid-reassigning-parameters:
+        ignore:
+          - "**"
+      avoid-string-instantiation:
+        ignore:
+          - "**"
+      forloop-variable-count:
+        max-variables: 2
+      literals-first-in-comparison:
+        ignore:
+          - "**"
+      one-declaration-per-line:
+        ignore:
+          - "**"
+      redundant-initializer:
         ignore:
           - "**"
   - java-code-style:
     rules:
+      avoid-dollar-signs:
+        ignore:
+          - "**"
       boolean-get-method-name:
+        ignore:
+          - "**"
+      control-statement-braces:
         ignore:
           - "**"
       generics-naming:

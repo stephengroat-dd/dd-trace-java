@@ -32,6 +32,7 @@ import datadog.trace.api.config.TracerConfig;
 import datadog.trace.api.config.UsmConfig;
 import datadog.trace.api.gateway.RequestContextSlot;
 import datadog.trace.api.gateway.SubscriptionService;
+import datadog.trace.api.profiling.ProfilingEnablement;
 import datadog.trace.api.scopemanager.ScopeListener;
 import datadog.trace.bootstrap.benchmark.StaticEventLogger;
 import datadog.trace.bootstrap.instrumentation.api.AgentTracer;
@@ -52,6 +53,7 @@ import java.security.CodeSource;
 import java.util.EnumSet;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.regex.PatternSyntaxException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -101,6 +103,11 @@ public class Agent {
     USM(propertyNameToSystemPropertyName(UsmConfig.USM_ENABLED), false),
     TELEMETRY(propertyNameToSystemPropertyName(GeneralConfig.TELEMETRY_ENABLED), true),
     DEBUGGER(propertyNameToSystemPropertyName(DebuggerConfig.DEBUGGER_ENABLED), false),
+    EXCEPTION_DEBUGGING(
+        propertyNameToSystemPropertyName(DebuggerConfig.EXCEPTION_REPLAY_ENABLED), false),
+    SPAN_ORIGIN(
+        propertyNameToSystemPropertyName(TraceInstrumentationConfig.CODE_ORIGIN_FOR_SPANS_ENABLED),
+        false),
     DATA_JOBS(propertyNameToSystemPropertyName(GeneralConfig.DATA_JOBS_ENABLED), false),
     AGENTLESS_LOG_SUBMISSION(
         propertyNameToSystemPropertyName(GeneralConfig.AGENTLESS_LOG_SUBMISSION_ENABLED), false);
@@ -147,9 +154,23 @@ public class Agent {
   private static boolean usmEnabled = false;
   private static boolean telemetryEnabled = true;
   private static boolean debuggerEnabled = false;
+  private static boolean exceptionDebuggingEnabled = false;
+  private static boolean spanOriginEnabled = false;
   private static boolean agentlessLogSubmissionEnabled = false;
 
-  public static void start(final Instrumentation inst, final URL agentJarURL, String agentArgs) {
+  /**
+   * Starts the agent; returns a boolean indicating if Agent started successfully
+   *
+   * <p>The Agent is considered to start successfully if Instrumentation can be activated. All other
+   * pieces are considered optional.
+   */
+  public static void start(
+      final Object bootstrapInitTelemetry,
+      final Instrumentation inst,
+      final URL agentJarURL,
+      final String agentArgs) {
+    InitializationTelemetry initTelemetry = InitializationTelemetry.proxy(bootstrapInitTelemetry);
+
     StaticEventLogger.begin("Agent");
     StaticEventLogger.begin("Agent.start");
 
@@ -161,8 +182,9 @@ public class Agent {
       remoteConfigEnabled = false;
       telemetryEnabled = false;
       // apply trace instrumentation, but skip starting other services
-      startDatadogAgent(inst);
+      startDatadogAgent(initTelemetry, inst);
       StaticEventLogger.end("Agent.start");
+
       return;
     }
 
@@ -211,6 +233,16 @@ public class Agent {
           propertyNameToSystemPropertyName("integration.spark.enabled"), "true");
       setSystemPropertyDefault(
           propertyNameToSystemPropertyName("integration.spark-executor.enabled"), "true");
+
+      String javaCommand = System.getProperty("sun.java.command");
+      String dataJobsCommandPattern = Config.get().getDataJobsCommandPattern();
+      if (!isDataJobsSupported(javaCommand, dataJobsCommandPattern)) {
+        log.warn(
+            "Data Jobs Monitoring is not compatible with non-spark command {} based on command pattern {}. dd-trace-java will not be installed",
+            javaCommand,
+            dataJobsCommandPattern);
+        return;
+      }
     }
 
     if (!isSupportedAppSecArch()) {
@@ -234,6 +266,8 @@ public class Agent {
     cwsEnabled = isFeatureEnabled(AgentFeature.CWS);
     telemetryEnabled = isFeatureEnabled(AgentFeature.TELEMETRY);
     debuggerEnabled = isFeatureEnabled(AgentFeature.DEBUGGER);
+    exceptionDebuggingEnabled = isFeatureEnabled(AgentFeature.EXCEPTION_DEBUGGING);
+    spanOriginEnabled = isFeatureEnabled(AgentFeature.SPAN_ORIGIN);
     agentlessLogSubmissionEnabled = isFeatureEnabled(AgentFeature.AGENTLESS_LOG_SUBMISSION);
 
     if (profilingEnabled) {
@@ -267,7 +301,7 @@ public class Agent {
      * when it will happen after the class transformers were added.
      */
     AgentTaskScheduler.initialize();
-    startDatadogAgent(inst);
+    startDatadogAgent(initTelemetry, inst);
 
     final EnumSet<Library> libraries = detectLibraries(log);
 
@@ -314,7 +348,7 @@ public class Agent {
      * logging facility. Likewise on IBM JDKs OkHttp may indirectly load 'IBMSASL' which in turn loads LogManager.
      */
     InstallDatadogTracerCallback installDatadogTracerCallback =
-        new InstallDatadogTracerCallback(inst);
+        new InstallDatadogTracerCallback(initTelemetry, inst);
     if (delayOkHttp) {
       log.debug("Custom logger detected. Delaying Datadog Tracer initialization.");
       registerLogManagerCallback(installDatadogTracerCallback);
@@ -385,10 +419,10 @@ public class Agent {
   }
 
   /** Used by AgentCLI to send sample traces from the command-line. */
-  public static void startDatadogTracer() throws Exception {
+  public static void startDatadogTracer(InitializationTelemetry initTelemetry) throws Exception {
     Class<?> scoClass =
         AGENT_CLASSLOADER.loadClass("datadog.communication.ddagent.SharedCommunicationObjects");
-    installDatadogTracer(scoClass, scoClass.getConstructor().newInstance());
+    installDatadogTracer(initTelemetry, scoClass, scoClass.getConstructor().newInstance());
     startJmx(); // send runtime metrics along with the traces
   }
 
@@ -463,9 +497,12 @@ public class Agent {
   }
 
   protected static class InstallDatadogTracerCallback extends ClassLoadCallBack {
+    private final InitializationTelemetry initTelemetry;
     private final Instrumentation instrumentation;
 
-    public InstallDatadogTracerCallback(Instrumentation instrumentation) {
+    public InstallDatadogTracerCallback(
+        InitializationTelemetry initTelemetry, Instrumentation instrumentation) {
+      this.initTelemetry = initTelemetry;
       this.instrumentation = instrumentation;
     }
 
@@ -490,7 +527,7 @@ public class Agent {
         throw new UndeclaredThrowableException(e);
       }
 
-      installDatadogTracer(scoClass, sco);
+      installDatadogTracer(initTelemetry, scoClass, sco);
       maybeStartAppSec(scoClass, sco);
       maybeStartIast(scoClass, sco);
       maybeStartCiVisibility(instrumentation, scoClass, sco);
@@ -570,9 +607,9 @@ public class Agent {
     StaticEventLogger.end("Remote Config");
   }
 
-  private static synchronized void startDatadogAgent(final Instrumentation inst) {
+  private static synchronized void startDatadogAgent(
+      final InitializationTelemetry initTelemetry, final Instrumentation inst) {
     if (null != inst) {
-
       StaticEventLogger.begin("BytebuddyAgent");
 
       try {
@@ -583,13 +620,15 @@ public class Agent {
         agentInstallerMethod.invoke(null, inst);
       } catch (final Throwable ex) {
         log.error("Throwable thrown while installing the Datadog Agent", ex);
+        initTelemetry.onFatalError(ex);
+      } finally {
+        StaticEventLogger.end("BytebuddyAgent");
       }
-
-      StaticEventLogger.end("BytebuddyAgent");
     }
   }
 
-  private static synchronized void installDatadogTracer(Class<?> scoClass, Object sco) {
+  private static synchronized void installDatadogTracer(
+      InitializationTelemetry initTelemetry, Class<?> scoClass, Object sco) {
     if (AGENT_CLASSLOADER == null) {
       throw new IllegalStateException("Datadog agent should have been started already");
     }
@@ -610,6 +649,8 @@ public class Agent {
       throw ex;
     } catch (final Throwable ex) {
       log.error("Throwable thrown while installing the Datadog Tracer", ex);
+
+      initTelemetry.onFatalError(ex);
     }
 
     StaticEventLogger.end("GlobalTracer");
@@ -638,14 +679,15 @@ public class Agent {
     if (jmxStarting.getAndSet(true)) {
       return; // another thread is already in startJmx
     }
-    // crash uploader initialization relies on JMX being available
-    initializeCrashUploader();
+    // error tracking initialization relies on JMX being available
+    initializeErrorTracking();
     if (jmxFetchEnabled) {
       startJmxFetch();
     }
     initializeJmxSystemAccessProvider(AGENT_CLASSLOADER);
     if (profilingEnabled) {
       registerDeadlockDetectionEvent();
+      registerSmapEntryEvent();
       if (PROFILER_INIT_AFTER_JMX != null) {
         if (getJmxStartDelay() == 0) {
           log.debug("Waiting for profiler initialization");
@@ -674,6 +716,23 @@ public class Agent {
       log.debug("JMX deadlock detection not supported");
     } catch (final Throwable ex) {
       log.error("Unable to initialize JMX thread deadlock detector", ex);
+    }
+  }
+
+  private static synchronized void registerSmapEntryEvent() {
+    log.debug("Initializing smap entry scraping");
+    try {
+      final Class<?> smapFactoryClass =
+          AGENT_CLASSLOADER.loadClass(
+              "com.datadog.profiling.controller.openjdk.events.SmapEntryFactory");
+      final Method registerMethod = smapFactoryClass.getMethod("registerEvents");
+      registerMethod.invoke(null);
+    } catch (final NoClassDefFoundError
+        | ClassNotFoundException
+        | UnsupportedClassVersionError ignored) {
+      log.debug("Smap entry scraping not supported");
+    } catch (final Throwable ex) {
+      log.error("Unable to initialize smap entry scraping", ex);
     }
   }
 
@@ -870,7 +929,7 @@ public class Agent {
     }
   }
 
-  private static void initializeCrashUploader() {
+  private static void initializeErrorTracking() {
     if (Platform.isJ9()) {
       // TODO currently crash tracking is supported only for HotSpot based JVMs
       return;
@@ -1019,7 +1078,7 @@ public class Agent {
   }
 
   private static void maybeStartDebugger(Instrumentation inst, Class<?> scoClass, Object sco) {
-    if (!debuggerEnabled) {
+    if (!debuggerEnabled && !exceptionDebuggingEnabled && !spanOriginEnabled) {
       return;
     }
     if (!remoteConfigEnabled) {
@@ -1124,6 +1183,11 @@ public class Agent {
       // true unless it's explicitly set to "false"
       return !("false".equalsIgnoreCase(featureEnabled) || "0".equals(featureEnabled));
     } else {
+      if (feature == AgentFeature.PROFILING) {
+        // We need this hack because profiling in SSI can receive 'auto' value in
+        // the enablement config
+        return ProfilingEnablement.of(featureEnabled).isActive();
+      }
       // false unless it's explicitly set to "true"
       return Boolean.parseBoolean(featureEnabled) || "1".equals(featureEnabled);
     }
@@ -1282,5 +1346,23 @@ public class Agent {
     // nothing to do with JDK - but this should be safe because only thing this does is to delay
     // tracer install
     return BootstrapProxy.INSTANCE.getResource("jdk/jfr/Recording.class") != null;
+  }
+
+  private static boolean isDataJobsSupported(String javaCommand, String dataJobsCommandPattern) {
+    if (null == javaCommand || null == dataJobsCommandPattern) {
+      // if sun.java.command somehow is not set or data jobs command pattern is not
+      // set, assume it's supported due to lack of info.
+      return true;
+    }
+
+    try {
+      return javaCommand.matches(dataJobsCommandPattern);
+    } catch (PatternSyntaxException e) {
+      log.warn(
+          "Invalid data jobs command pattern {}. The value must be a valid regex",
+          dataJobsCommandPattern);
+    }
+
+    return true;
   }
 }

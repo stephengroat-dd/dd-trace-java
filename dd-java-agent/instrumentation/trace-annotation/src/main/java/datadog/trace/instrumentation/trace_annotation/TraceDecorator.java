@@ -4,10 +4,10 @@ import static datadog.trace.bootstrap.instrumentation.api.AgentTracer.startSpan;
 
 import datadog.trace.api.InstrumenterConfig;
 import datadog.trace.api.Trace;
+import datadog.trace.bootstrap.debugger.spanorigin.CodeOriginInfo;
 import datadog.trace.bootstrap.instrumentation.api.AgentSpan;
 import datadog.trace.bootstrap.instrumentation.api.UTF8BytesString;
 import datadog.trace.bootstrap.instrumentation.decorator.AsyncResultDecorator;
-import datadog.trace.bootstrap.instrumentation.span_origin.EntrySpanOriginInfo;
 import java.lang.reflect.Method;
 
 public class TraceDecorator extends AsyncResultDecorator {
@@ -91,7 +91,7 @@ public class TraceDecorator extends AsyncResultDecorator {
     afterStart(span);
     span.setResourceName(resourceName);
 
-    EntrySpanOriginInfo.apply(method, span);
+    CodeOriginInfo.entry(method);
     if (measured || InstrumenterConfig.get().isMethodMeasured(method)) {
       span.setMeasured(true);
     }
@@ -100,9 +100,10 @@ public class TraceDecorator extends AsyncResultDecorator {
   }
 
   @Override
-  public Object wrapAsyncResultOrFinishSpan(Object result, AgentSpan span) {
+  public Object wrapAsyncResultOrFinishSpan(
+      Object result, Class<?> methodReturnType, AgentSpan span) {
     if (ASYNC_SUPPORT) {
-      return super.wrapAsyncResultOrFinishSpan(result, span);
+      return super.wrapAsyncResultOrFinishSpan(result, methodReturnType, span);
     } else {
       span.finish();
       return result;

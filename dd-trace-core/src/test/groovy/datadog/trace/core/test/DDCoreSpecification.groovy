@@ -28,6 +28,7 @@ abstract class DDCoreSpecification extends DDSpecification {
   @Override
   void setupSpec() {
     TagsPostProcessorFactory.withAddBaseService(false)
+    TagsPostProcessorFactory.withAddRemoteHostname(false)
   }
 
   @Override
@@ -72,7 +73,7 @@ abstract class DDCoreSpecification extends DDSpecification {
       false,
       spanType,
       0,
-      tracer.pendingTraceFactory.create(DDTraceId.ONE),
+      tracer.traceCollectorFactory.create(DDTraceId.ONE),
       null,
       null,
       ciVisibilityContextData,

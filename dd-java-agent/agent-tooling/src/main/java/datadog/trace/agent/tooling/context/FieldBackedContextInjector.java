@@ -5,6 +5,7 @@ import static datadog.trace.util.Strings.getInternalName;
 
 import datadog.trace.agent.tooling.bytebuddy.memoize.MemoizedMatchers;
 import datadog.trace.api.InstrumenterConfig;
+import datadog.trace.api.Pair;
 import datadog.trace.bootstrap.ContextStore;
 import datadog.trace.bootstrap.FieldBackedContextAccessor;
 import datadog.trace.bootstrap.FieldBackedContextStores;
@@ -70,7 +71,7 @@ public final class FieldBackedContextInjector implements AsmVisitorWrapper {
       Type.getType(FieldBackedContextAccessor.class);
 
   /** Keeps track of injection requests for the class being transformed by the current thread. */
-  static final ThreadLocal<BitSet> INJECTED_STORE_IDS = new ThreadLocal<>();
+  static final ThreadLocal<Pair<String, BitSet>> INJECTED_STORE_IDS = new ThreadLocal<>();
 
   final boolean serialVersionUIDFieldInjection =
       InstrumenterConfig.get().isSerialVersionUIDFieldInjection();
@@ -105,7 +106,7 @@ public final class FieldBackedContextInjector implements AsmVisitorWrapper {
       final MethodList<?> methods,
       final int writerFlags,
       final int readerFlags) {
-    return new ClassVisitor(Opcodes.ASM7, classVisitor) {
+    return new ClassVisitor(Opcodes.ASM8, classVisitor) {
 
       private final boolean frames =
           implementationContext.getClassFileVersion().isAtLeast(ClassFileVersion.JAVA_V6);
@@ -129,7 +130,7 @@ public final class FieldBackedContextInjector implements AsmVisitorWrapper {
 
         // keep track of all injection requests for the class currently being transformed
         // because we need to switch between them in the generated getter/putter methods
-        int storeId = injectContextStore(keyClassName, contextClassName);
+        int storeId = injectContextStore(name, keyClassName, contextClassName);
         storeFieldName = CONTEXT_STORE_ACCESS_PREFIX + storeId;
 
         if (interfaces == null) {
@@ -484,32 +485,36 @@ public final class FieldBackedContextInjector implements AsmVisitorWrapper {
   }
 
   /** Requests injection of a context store for a key and context. */
-  static int injectContextStore(final String keyClassName, final String contextClassName) {
+  static int injectContextStore(
+      final String target, final String keyClassName, final String contextClassName) {
     int storeId = getContextStoreId(keyClassName, contextClassName);
 
-    BitSet injectedStoreIds = INJECTED_STORE_IDS.get();
-    if (null == injectedStoreIds) {
-      injectedStoreIds = new BitSet();
+    // collect a new set of store ids every time we see a new target
+    Pair<String, BitSet> injectedStoreIds = INJECTED_STORE_IDS.get();
+    if (null == injectedStoreIds || !target.equals(injectedStoreIds.getLeft())) {
+      injectedStoreIds = Pair.of(target, new BitSet());
       INJECTED_STORE_IDS.set(injectedStoreIds);
     }
-    injectedStoreIds.set(storeId);
+    injectedStoreIds.getRight().set(storeId);
 
     return storeId;
   }
 
   /** Returns all context store injection requests for the class being transformed. */
   static BitSet getInjectedContextStores() {
-    BitSet injectedStoreIds = INJECTED_STORE_IDS.get();
+    Pair<String, BitSet> injectedStoreIds = INJECTED_STORE_IDS.get();
     if (null != injectedStoreIds) {
       INJECTED_STORE_IDS.remove();
+      return injectedStoreIds.getRight();
+    } else {
+      return null;
     }
-    return injectedStoreIds;
   }
 
   private static final class SerialVersionUIDInjector
       extends datadog.trace.agent.tooling.context.asm.SerialVersionUIDAdder {
     public SerialVersionUIDInjector() {
-      super(Opcodes.ASM7, null);
+      super(Opcodes.ASM8, null);
     }
 
     public void injectSerialVersionUID(

@@ -1,7 +1,6 @@
 package datadog.trace.core.flare;
 
 import static datadog.trace.util.AgentThreadFactory.AgentThread.TRACER_FLARE;
-import static java.nio.file.Files.readAllBytes;
 
 import datadog.communication.http.OkHttpUtils;
 import datadog.trace.api.Config;
@@ -14,11 +13,8 @@ import datadog.trace.logging.GlobalLogLevelSwitcher;
 import datadog.trace.logging.LogLevel;
 import datadog.trace.util.AgentTaskScheduler;
 import datadog.trace.util.AgentTaskScheduler.Scheduled;
-import datadog.trace.util.Strings;
 import java.io.ByteArrayOutputStream;
-import java.io.File;
 import java.io.IOException;
-import java.io.RandomAccessFile;
 import java.lang.management.ManagementFactory;
 import java.lang.management.RuntimeMXBean;
 import java.lang.management.ThreadInfo;
@@ -120,6 +116,7 @@ final class TracerFlareService {
 
   public synchronized void prepareForFlare(String logLevel) {
     // allow turning on debug even part way through preparation
+
     if (!log.isDebugEnabled() && "debug".equalsIgnoreCase(logLevel)) {
       GlobalLogLevelSwitcher.get().switchLevel(LogLevel.DEBUG);
       logLevelOverridden = true;
@@ -221,7 +218,6 @@ final class TracerFlareService {
       if (dumpThreads) {
         addThreadDump(zip);
       }
-      addLogs(zip);
       zip.finish();
 
       return bytes.toByteArray();
@@ -242,8 +238,7 @@ final class TracerFlareService {
   private void addRuntime(ZipOutputStream zip) throws IOException {
     try {
       RuntimeMXBean runtimeMXBean = ManagementFactory.getRuntimeMXBean();
-      TracerFlare.addText(
-          zip, "jvm_args.txt", Strings.join(" ", runtimeMXBean.getInputArguments()));
+      TracerFlare.addText(zip, "jvm_args.txt", String.join(" ", runtimeMXBean.getInputArguments()));
       TracerFlare.addText(zip, "classpath.txt", runtimeMXBean.getClassPath());
       TracerFlare.addText(zip, "library_path.txt", runtimeMXBean.getLibraryPath());
       if (runtimeMXBean.isBootClassPathSupported()) {
@@ -280,38 +275,6 @@ final class TracerFlareService {
       buf.append("Problem collecting thread dump: ").append(e);
     }
     TracerFlare.addText(zip, "threads.txt", buf.toString());
-  }
-
-  private void addLogs(ZipOutputStream zip) throws IOException {
-    // org.slf4j.simpleLogger.logFile transformed as datadog.slf4j.simpleLogger.logFile in the final
-    // dd-java-agent jar
-    String logFile = System.getProperty("org.slf4j.simpleLogger.logFile");
-    if (logFile == null || logFile.isEmpty()) {
-      TracerFlare.addText(zip, "tracer.log", "No tracer log file specified");
-      return;
-    }
-    Path path = Paths.get(logFile);
-    if (Files.exists(path)) {
-      try {
-        long size = Files.size(path);
-        if (size > MAX_LOGFILE_SIZE_BYTES) {
-          int maxSizeOfSplit = MAX_LOGFILE_SIZE_BYTES / 2;
-          File originalFile = new File(path.toString());
-          try (RandomAccessFile ras = new RandomAccessFile(originalFile, "r")) {
-            final byte[] buffer = new byte[maxSizeOfSplit];
-            ras.readFully(buffer);
-            TracerFlare.addBinary(zip, "tracer_begin.log", buffer);
-            ras.seek(size - maxSizeOfSplit);
-            ras.readFully(buffer);
-            TracerFlare.addBinary(zip, "tracer_end.log", buffer);
-          }
-        } else {
-          TracerFlare.addBinary(zip, "tracer.log", readAllBytes(path));
-        }
-      } catch (Throwable e) {
-        TracerFlare.addText(zip, "tracer.log", "Problem collecting tracer log: " + e);
-      }
-    }
   }
 
   final class CleanupTask implements Runnable {

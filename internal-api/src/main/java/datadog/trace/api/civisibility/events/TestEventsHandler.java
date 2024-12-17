@@ -78,15 +78,17 @@ public interface TestEventsHandler<SuiteKey, TestKey> extends Closeable {
   @Nonnull
   TestRetryPolicy retryPolicy(TestIdentifier test);
 
+  boolean isNew(TestIdentifier test);
+
+  boolean isFlaky(TestIdentifier test);
+
   @Override
   void close();
 
   interface Factory {
-    <SuiteKey, TestKey> TestEventsHandler<SuiteKey, TestKey> create(String component);
-
     <SuiteKey, TestKey> TestEventsHandler<SuiteKey, TestKey> create(
         String component,
-        ContextStore<SuiteKey, DDTestSuite> suiteStore,
-        ContextStore<TestKey, DDTest> testStore);
+        @Nullable ContextStore<SuiteKey, DDTestSuite> suiteStore,
+        @Nullable ContextStore<TestKey, DDTest> testStore);
   }
 }

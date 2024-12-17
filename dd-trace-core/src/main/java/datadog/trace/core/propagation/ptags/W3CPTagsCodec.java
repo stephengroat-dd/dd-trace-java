@@ -26,7 +26,6 @@ public class W3CPTagsCodec extends PTagsCodec {
   private static final int MIN_ALLOWED_CHAR = 32;
   private static final int MAX_ALLOWED_CHAR = 126;
   private static final int MAX_MEMBER_COUNT = 32;
-  private static final String LAST_PARENT_ZERO = "0000000000000000";
 
   @Override
   PropagationTags fromHeaderValue(PTagsFactory tagsFactory, String value) {
@@ -94,8 +93,9 @@ public class W3CPTagsCodec extends PTagsCodec {
     CharSequence origin = null;
     TagValue decisionMakerTagValue = null;
     TagValue traceIdTagValue = null;
+    boolean appsecPropagationEnabled = false;
     int maxUnknownSize = 0;
-    CharSequence lastParentId = LAST_PARENT_ZERO;
+    CharSequence lastParentId = null;
     while (tagPos < ddMemberValueEnd) {
       int tagKeyEndsAt =
           validateCharsUntilSeparatorOrEnd(
@@ -147,6 +147,8 @@ public class W3CPTagsCodec extends PTagsCodec {
             decisionMakerTagValue = tagValue;
           } else if (tagKey.equals(TRACE_ID_TAG)) {
             traceIdTagValue = tagValue;
+          } else if (tagKey.equals(APPSEC_TAG)) {
+            appsecPropagationEnabled = tagValue.charAt(0) == '1';
           } else {
             if (tagPairs == null) {
               // This is roughly the size of a two element linked list but can hold six
@@ -180,6 +182,7 @@ public class W3CPTagsCodec extends PTagsCodec {
         tagPairs,
         decisionMakerTagValue,
         traceIdTagValue,
+        appsecPropagationEnabled,
         samplingPriority,
         origin,
         value,
@@ -238,7 +241,7 @@ public class W3CPTagsCodec extends PTagsCodec {
     }
     // append last ParentId (p)
     CharSequence lastParent = ptags.getLastParentId();
-    if (lastParent != null && !lastParent.equals(LAST_PARENT_ZERO)) {
+    if (lastParent != null) {
       if (sb.length() > EMPTY_SIZE) {
         sb.append(';');
       }
@@ -704,6 +707,7 @@ public class W3CPTagsCodec extends PTagsCodec {
         null,
         null,
         null,
+        false,
         PrioritySampling.UNSET,
         null,
         original,
@@ -735,6 +739,7 @@ public class W3CPTagsCodec extends PTagsCodec {
         List<TagElement> tagPairs,
         TagValue decisionMakerTagValue,
         TagValue traceIdTagValue,
+        boolean appsecPropagationEnabled,
         int samplingPriority,
         CharSequence origin,
         String original,
@@ -748,6 +753,7 @@ public class W3CPTagsCodec extends PTagsCodec {
           tagPairs,
           decisionMakerTagValue,
           traceIdTagValue,
+          appsecPropagationEnabled,
           samplingPriority,
           origin,
           lastParentId);

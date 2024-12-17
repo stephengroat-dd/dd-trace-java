@@ -22,6 +22,10 @@ excludedClassesCoverage += [
   'datadog.trace.core.monitor.LoggingStatsDClient',
   'datadog.trace.core.PendingTraceBuffer.DelayingPendingTraceBuffer.FlushElement',
   'datadog.trace.core.StatusLogger',
+  // covered with CI Visibility smoke tests
+  'datadog.trace.core.StreamingTraceCollector',
+  // covered with CI Visibility smoke tests
+  'datadog.trace.core.StreamingTraceCollector.Factory',
   'datadog.trace.core.scopemanager.ContinuableScopeManager.ScopeStackThreadLocal',
   'datadog.trace.core.scopemanager.SingleContinuation',
   // FIXME: more test coverage needed
@@ -42,6 +46,8 @@ excludedClassesCoverage += [
   'datadog.trace.core.TracingConfigPoller.TracingSamplingRules',
   'datadog.trace.core.TracingConfigPoller.TracingSamplingRulesAdapter',
   'datadog.trace.core.TracingConfigPoller.Updater',
+  // covered with dd-trace-core/src/test/groovy/datadog/trace/core/datastreams/CheckpointerTest.groovy
+  'datadog.trace.core.datastreams.DefaultDataStreamsMonitoring',
 ]
 
 addTestSuite('traceAgentTest')
@@ -55,6 +61,7 @@ dependencies {
   api project(':dd-trace-api')
   api project(':communication')
   api project(':internal-api')
+  implementation project(':components:json')
   implementation project(':utils:container-utils')
   implementation project(':utils:socket-utils')
   // for span exception debugging
@@ -74,7 +81,8 @@ dependencies {
   testAnnotationProcessor libs.autoservice.processor
   testCompileOnly libs.autoservice.annotation
 
-  testImplementation project(":dd-java-agent:testing")
+  testImplementation project(':dd-java-agent:testing')
+  testImplementation project(':remote-config:remote-config-core')
   testImplementation group: 'org.msgpack', name: 'msgpack-core', version: '0.8.20'
   testImplementation group: 'org.msgpack', name: 'jackson-dataformat-msgpack', version: '0.8.20'
   testImplementation group: 'org.openjdk.jol', name: 'jol-core', version: '0.16'

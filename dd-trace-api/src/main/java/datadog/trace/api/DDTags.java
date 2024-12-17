@@ -2,12 +2,11 @@ package datadog.trace.api;
 
 public class DDTags {
 
-  public static final String DD_ENTRY_LOCATION_FILE = "_dd.entry_location.file";
-  public static final String DD_ENTRY_METHOD = "_dd.entry_location.method";
-  public static final String DD_ENTRY_METHOD_SIGNATURE = "_dd.entry_location.signature";
-  public static final String DD_ENTRY_LINE = "_dd.entry_location.line";
-  public static final String DD_EXIT_LOCATION_FILE = "_dd.exit_location.%d.file";
-  public static final String DD_EXIT_LOCATION_LINE = "_dd.exit_location.%d.line";
+  public static final String DD_CODE_ORIGIN_PREFIX = "_dd.code_origin.";
+
+  public static final String DD_CODE_ORIGIN_TYPE = DD_CODE_ORIGIN_PREFIX + "type";
+  // _dd.code_origin.frames.%d.file|line|method|type|snapshot_id
+  public static final String DD_CODE_ORIGIN_FRAME = DD_CODE_ORIGIN_PREFIX + "frames.%d.%s";
 
   public static final String SPAN_TYPE = "span.type";
   public static final String SERVICE_NAME = "service.name";
@@ -45,6 +44,7 @@ public class DDTags {
 
   /* Tags below are for internal use only. */
   static final String INTERNAL_HOST_NAME = "_dd.hostname";
+  public static final String TRACER_HOST = "_dd.tracer_host";
   public static final String RUNTIME_ID_TAG = "runtime-id";
   public static final String RUNTIME_VERSION_TAG = "runtime_version";
   static final String SERVICE = "service";
@@ -54,6 +54,7 @@ public class DDTags {
   public static final String LANGUAGE_TAG_VALUE = "jvm";
   public static final String ORIGIN_KEY = "_dd.origin";
   public static final String SPAN_LINKS = "_dd.span_links";
+  public static final String SPAN_EVENTS = "events";
   public static final String LIBRARY_VERSION_TAG_KEY = "library_version";
   public static final String CI_ENV_VARS = "_dd.ci.env_vars";
   public static final String CI_ITR_TESTS_SKIPPED = "_dd.ci.itr.tests_skipped";
@@ -64,6 +65,7 @@ public class DDTags {
   public static final String PEER_SERVICE_REMAPPED_FROM = "_dd.peer.service.remapped_from";
   public static final String INTERNAL_GIT_REPOSITORY_URL = "_dd.git.repository_url";
   public static final String INTERNAL_GIT_COMMIT_SHA = "_dd.git.commit.sha";
+  public static final String HOST_VCPU_COUNT = "_dd.host.vcpu_count";
 
   public static final String PROFILING_ENABLED = "_dd.profiling.enabled";
   public static final String DSM_ENABLED = "_dd.dsm.enabled";
@@ -72,4 +74,5 @@ public class DDTags {
   public static final String PROFILING_CONTEXT_ENGINE = "_dd.profiling.ctx";
   public static final String BASE_SERVICE = "_dd.base_service";
   public static final String PARENT_ID = "_dd.parent_id";
+  public static final String APM_ENABLED = "_dd.apm.enabled";
 }

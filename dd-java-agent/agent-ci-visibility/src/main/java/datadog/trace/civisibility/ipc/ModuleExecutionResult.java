@@ -1,55 +1,40 @@
 package datadog.trace.civisibility.ipc;
 
+import datadog.trace.api.DDTraceId;
 import java.nio.ByteBuffer;
-import java.util.Arrays;
 import java.util.Collection;
 import java.util.Objects;
-import javax.annotation.Nullable;
 
-public class ModuleExecutionResult implements Signal {
+public class ModuleExecutionResult extends ModuleSignal {
 
   private static final int COVERAGE_ENABLED_FLAG = 1;
   private static final int TEST_SKIPPING_ENABLED_FLAG = 2;
   private static final int EARLY_FLAKE_DETECTION_ENABLED_FLAG = 4;
   private static final int EARLY_FLAKE_DETECTION_FAULTY_FLAG = 8;
 
-  private final long sessionId;
-  private final long moduleId;
   private final boolean coverageEnabled;
   private final boolean testSkippingEnabled;
   private final boolean earlyFlakeDetectionEnabled;
   private final boolean earlyFlakeDetectionFaulty;
   private final long testsSkippedTotal;
   private final Collection<TestFramework> testFrameworks;
-  @Nullable private final byte[] coverageData;
 
   public ModuleExecutionResult(
-      long sessionId,
+      DDTraceId sessionId,
       long moduleId,
       boolean coverageEnabled,
       boolean testSkippingEnabled,
       boolean earlyFlakeDetectionEnabled,
       boolean earlyFlakeDetectionFaulty,
       long testsSkippedTotal,
-      Collection<TestFramework> testFrameworks,
-      @Nullable byte[] coverageData) {
-    this.sessionId = sessionId;
-    this.moduleId = moduleId;
+      Collection<TestFramework> testFrameworks) {
+    super(sessionId, moduleId);
     this.coverageEnabled = coverageEnabled;
     this.testSkippingEnabled = testSkippingEnabled;
     this.earlyFlakeDetectionEnabled = earlyFlakeDetectionEnabled;
     this.earlyFlakeDetectionFaulty = earlyFlakeDetectionFaulty;
     this.testsSkippedTotal = testsSkippedTotal;
     this.testFrameworks = testFrameworks;
-    this.coverageData = coverageData;
-  }
-
-  public long getSessionId() {
-    return sessionId;
-  }
-
-  public long getModuleId() {
-    return moduleId;
   }
 
   public boolean isCoverageEnabled() {
@@ -76,11 +61,6 @@ public class ModuleExecutionResult implements Signal {
     return testFrameworks;
   }
 
-  @Nullable
-  public byte[] getCoverageData() {
-    return coverageData;
-  }
-
   @Override
   public boolean equals(Object o) {
     if (this == o) {
@@ -90,13 +70,13 @@ public class ModuleExecutionResult implements Signal {
       return false;
     }
     ModuleExecutionResult that = (ModuleExecutionResult) o;
-    return sessionId == that.sessionId
+    return sessionId.toLong() == that.sessionId.toLong()
+        && sessionId.toHighOrderLong() == that.sessionId.toHighOrderLong()
         && moduleId == that.moduleId
         && coverageEnabled == that.coverageEnabled
         && testSkippingEnabled == that.testSkippingEnabled
         && testsSkippedTotal == that.testsSkippedTotal
-        && Objects.equals(testFrameworks, that.testFrameworks)
-        && Arrays.equals(coverageData, that.coverageData);
+        && Objects.equals(testFrameworks, that.testFrameworks);
   }
 
   @Override
@@ -107,8 +87,7 @@ public class ModuleExecutionResult implements Signal {
         coverageEnabled,
         testSkippingEnabled,
         testsSkippedTotal,
-        testFrameworks,
-        Arrays.hashCode(coverageData));
+        testFrameworks);
   }
 
   @Override
@@ -135,7 +114,7 @@ public class ModuleExecutionResult implements Signal {
   @Override
   public ByteBuffer serialize() {
     Serializer s = new Serializer();
-    s.write(sessionId);
+    s.write(sessionId.toHexString());
     s.write(moduleId);
 
     byte flags = 0;
@@ -155,13 +134,12 @@ public class ModuleExecutionResult implements Signal {
 
     s.write(testsSkippedTotal);
     s.write(testFrameworks, TestFramework::serialize);
-    s.write(coverageData);
 
     return s.flush();
   }
 
   public static ModuleExecutionResult deserialize(ByteBuffer buffer) {
-    long sessionId = Serializer.readLong(buffer);
+    DDTraceId sessionId = DDTraceId.fromHex(Serializer.readString(buffer));
     long moduleId = Serializer.readLong(buffer);
 
     int flags = Serializer.readByte(buffer);
@@ -173,7 +151,6 @@ public class ModuleExecutionResult implements Signal {
     long testsSkippedTotal = Serializer.readLong(buffer);
     Collection<TestFramework> testFrameworks =
         Serializer.readList(buffer, TestFramework::deserialize);
-    byte[] coverageData = Serializer.readByteArray(buffer);
 
     return new ModuleExecutionResult(
         sessionId,
@@ -183,7 +160,6 @@ public class ModuleExecutionResult implements Signal {
         earlyFlakeDetectionEnabled,
         earlyFlakeDetectionFaulty,
         testsSkippedTotal,
-        testFrameworks,
-        coverageData);
+        testFrameworks);
   }
 }

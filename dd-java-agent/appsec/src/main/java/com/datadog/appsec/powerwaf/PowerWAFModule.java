@@ -1,5 +1,6 @@
 package com.datadog.appsec.powerwaf;
 
+import static datadog.trace.util.stacktrace.StackTraceEvent.DEFAULT_LANGUAGE;
 import static java.util.Collections.emptyList;
 import static java.util.Collections.singletonList;
 import static java.util.stream.Collectors.toMap;
@@ -13,22 +14,28 @@ import com.datadog.appsec.event.data.Address;
 import com.datadog.appsec.event.data.DataBundle;
 import com.datadog.appsec.event.data.KnownAddresses;
 import com.datadog.appsec.gateway.AppSecRequestContext;
+import com.datadog.appsec.gateway.GatewayContext;
+import com.datadog.appsec.gateway.RateLimiter;
 import com.datadog.appsec.report.AppSecEvent;
-import com.datadog.appsec.stack_trace.StackTraceEvent;
-import com.datadog.appsec.stack_trace.StackTraceEvent.Frame;
 import com.datadog.appsec.util.StandardizedLogging;
 import com.squareup.moshi.JsonAdapter;
 import com.squareup.moshi.Moshi;
 import com.squareup.moshi.Types;
 import datadog.appsec.api.blocking.BlockingContentType;
+import datadog.communication.monitor.Counter;
+import datadog.communication.monitor.Monitoring;
 import datadog.trace.api.Config;
 import datadog.trace.api.ProductActivation;
 import datadog.trace.api.gateway.Flow;
 import datadog.trace.api.telemetry.LogCollector;
 import datadog.trace.api.telemetry.WafMetricCollector;
+import datadog.trace.api.time.SystemTimeSource;
 import datadog.trace.bootstrap.instrumentation.api.AgentSpan;
 import datadog.trace.bootstrap.instrumentation.api.AgentTracer;
-import datadog.trace.util.stacktrace.StackWalkerFactory;
+import datadog.trace.bootstrap.instrumentation.api.Tags;
+import datadog.trace.util.stacktrace.StackTraceEvent;
+import datadog.trace.util.stacktrace.StackTraceFrame;
+import datadog.trace.util.stacktrace.StackUtils;
 import io.sqreen.powerwaf.Additive;
 import io.sqreen.powerwaf.Powerwaf;
 import io.sqreen.powerwaf.PowerwafConfig;
@@ -60,7 +67,6 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
-import java.util.stream.IntStream;
 import javax.annotation.Nonnull;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -146,8 +152,17 @@ public class PowerWAFModule implements AppSecModule {
   private final PowerWAFInitializationResultReporter initReporter =
       new PowerWAFInitializationResultReporter();
   private final PowerWAFStatsReporter statsReporter = new PowerWAFStatsReporter();
+  private final RateLimiter rateLimiter;
 
   private String currentRulesVersion;
+
+  public PowerWAFModule() {
+    this(null);
+  }
+
+  public PowerWAFModule(Monitoring monitoring) {
+    this.rateLimiter = getRateLimiter(monitoring);
+  }
 
   @Override
   public void config(AppSecModuleConfigurer appSecConfigService)
@@ -327,6 +342,21 @@ public class PowerWAFModule implements AppSecModule {
     return pwConfig;
   }
 
+  private static RateLimiter getRateLimiter(Monitoring monitoring) {
+    if (monitoring == null) {
+      return null;
+    }
+    RateLimiter rateLimiter = null;
+    int appSecTraceRateLimit = Config.get().getAppSecTraceRateLimit();
+    if (appSecTraceRateLimit > 0) {
+      Counter counter = monitoring.newCounter("_dd.java.appsec.rate_limit.dropped_traces");
+      rateLimiter =
+          new RateLimiter(
+              appSecTraceRateLimit, SystemTimeSource.INSTANCE, () -> counter.increment(1));
+    }
+    return rateLimiter;
+  }
+
   @Override
   public String getName() {
     return "powerwaf";
@@ -357,24 +387,8 @@ public class PowerWAFModule implements AppSecModule {
       Address<?> address = KnownAddresses.forName(addrKey);
       if (address != null) {
         addressList.add(address);
-      } else {
-        log.warn("WAF has rule against unknown address {}", addrKey);
       }
     }
-
-    // TODO: get addresses dynamically when will it be implemented in waf
-    addressList.add(KnownAddresses.WAF_CONTEXT_PROCESSOR);
-    addressList.add(KnownAddresses.HEADERS_NO_COOKIES);
-    addressList.add(KnownAddresses.REQUEST_QUERY);
-    addressList.add(KnownAddresses.REQUEST_PATH_PARAMS);
-    addressList.add(KnownAddresses.REQUEST_COOKIES);
-    addressList.add(KnownAddresses.REQUEST_BODY_RAW);
-    addressList.add(KnownAddresses.RESPONSE_HEADERS_NO_COOKIES);
-    addressList.add(KnownAddresses.RESPONSE_BODY_OBJECT);
-    addressList.add(KnownAddresses.GRAPHQL_SERVER_ALL_RESOLVERS);
-    addressList.add(KnownAddresses.DB_TYPE);
-    addressList.add(KnownAddresses.DB_SQL_QUERY);
-
     return addressList;
   }
 
@@ -385,11 +399,19 @@ public class PowerWAFModule implements AppSecModule {
 
     @Override
     public void onDataAvailable(
-        ChangeableFlow flow, AppSecRequestContext reqCtx, DataBundle newData, boolean isTransient) {
+        ChangeableFlow flow,
+        AppSecRequestContext reqCtx,
+        DataBundle newData,
+        GatewayContext gwCtx) {
       Powerwaf.ResultWithData resultWithData;
       CtxAndAddresses ctxAndAddr = ctxAndAddresses.get();
       if (ctxAndAddr == null) {
         log.debug("Skipped; the WAF is not configured");
+        return;
+      }
+
+      if (reqCtx.isAdditiveClosed()) {
+        log.debug("Skipped; the WAF context is closed");
         return;
       }
 
@@ -399,14 +421,24 @@ public class PowerWAFModule implements AppSecModule {
         start = System.currentTimeMillis();
       }
 
+      if (gwCtx.isRasp) {
+        WafMetricCollector.get().raspRuleEval(gwCtx.raspRuleType);
+      }
+
       try {
-        resultWithData = doRunPowerwaf(reqCtx, newData, ctxAndAddr, isTransient);
+        resultWithData = doRunPowerwaf(reqCtx, newData, ctxAndAddr, gwCtx);
       } catch (TimeoutPowerwafException tpe) {
         reqCtx.increaseTimeouts();
+        WafMetricCollector.get().wafRequestTimeout();
         log.debug(LogCollector.EXCLUDE_TELEMETRY, "Timeout calling the WAF", tpe);
+        if (gwCtx.isRasp) {
+          WafMetricCollector.get().raspTimeout(gwCtx.raspRuleType);
+        }
         return;
       } catch (AbstractPowerwafException e) {
-        log.error("Error calling WAF", e);
+        if (!reqCtx.isAdditiveClosed()) {
+          log.error("Error calling WAF", e);
+        }
         return;
       } finally {
         if (log.isDebugEnabled()) {
@@ -422,6 +454,10 @@ public class PowerWAFModule implements AppSecModule {
           log.warn("WAF signalled result {}: {}", resultWithData.result, resultWithData.data);
         }
 
+        if (gwCtx.isRasp) {
+          WafMetricCollector.get().raspRuleMatch(gwCtx.raspRuleType);
+        }
+
         for (Map.Entry<String, Map<String, Object>> action : resultWithData.actions.entrySet()) {
           String actionType = action.getKey();
           Map<String, Object> actionParams = action.getValue();
@@ -434,25 +470,46 @@ public class PowerWAFModule implements AppSecModule {
           } else if ("redirect_request".equals(actionInfo.type)) {
             Flow.Action.RequestBlockingAction rba = createRedirectRequestAction(actionInfo);
             flow.setAction(rba);
-          } else if ("generate_stack".equals(actionInfo.type)
-              && Config.get().isAppSecStackTraceEnabled()) {
-            String stackId = (String) actionInfo.parameters.get("stack_id");
-            StackTraceEvent stackTraceEvent = createExploitStackTraceEvent(stackId);
-            reqCtx.reportStackTrace(stackTraceEvent);
+          } else if ("generate_stack".equals(actionInfo.type)) {
+            if (Config.get().isAppSecStackTraceEnabled()) {
+              String stackId = (String) actionInfo.parameters.get("stack_id");
+              StackTraceEvent stackTraceEvent = createExploitStackTraceEvent(stackId);
+              reqCtx.reportStackTrace(stackTraceEvent);
+            } else {
+              log.debug("Ignoring action with type generate_stack (disabled by config)");
+            }
           } else {
             log.info("Ignoring action with type {}", actionInfo.type);
           }
         }
         Collection<AppSecEvent> events = buildEvents(resultWithData);
-        reqCtx.reportEvents(events);
+
+        if (!events.isEmpty() && !reqCtx.isThrottled(rateLimiter)) {
+          AgentSpan activeSpan = AgentTracer.get().activeSpan();
+          if (activeSpan != null) {
+            log.debug("Setting force-keep tag on the current span");
+            // Keep event related span, because it could be ignored in case of
+            // reduced datadog sampling rate.
+            activeSpan.getLocalRootSpan().setTag(Tags.ASM_KEEP, true);
+            // If APM is disabled, inform downstream services that the current
+            // distributed trace contains at least one ASM event and must inherit
+            // the given force-keep priority
+            activeSpan.getLocalRootSpan().setTag(Tags.PROPAGATED_APPSEC, true);
+          } else {
+            // If active span is not available the ASK_KEEP tag will be set in the GatewayBridge
+            // when the request ends
+            log.debug("There is no active span available");
+          }
+          reqCtx.reportEvents(events);
+        }
 
         if (flow.isBlocking()) {
           reqCtx.setBlocked();
         }
       }
 
-      if (resultWithData != null && resultWithData.schemas != null) {
-        reqCtx.reportApiSchemas(resultWithData.schemas);
+      if (resultWithData.derivatives != null) {
+        reqCtx.reportDerivatives(resultWithData.derivatives);
       }
     }
 
@@ -510,39 +567,28 @@ public class PowerWAFModule implements AppSecModule {
       if (stackId == null || stackId.isEmpty()) {
         return null;
       }
-      List<Frame> result = generateUserCodeStackTrace();
-      return new StackTraceEvent(stackId, EXPLOIT_DETECTED_MSG, result);
-    }
-
-    /** Function generates stack trace of the user code (excluding datadog classes) */
-    private List<Frame> generateUserCodeStackTrace() {
-      int stackCapacity = Config.get().getAppSecMaxStackTraceDepth();
-      List<StackTraceElement> elements =
-          StackWalkerFactory.INSTANCE.walk(
-              stream ->
-                  stream
-                      .filter(
-                          elem ->
-                              !elem.getClassName().startsWith("com.datadog")
-                                  && !elem.getClassName().startsWith("datadog.trace"))
-                      .limit(stackCapacity)
-                      .collect(Collectors.toList()));
-      return IntStream.range(0, elements.size())
-          .mapToObj(idx -> new Frame(elements.get(idx), idx))
-          .collect(Collectors.toList());
+      List<StackTraceFrame> result = StackUtils.generateUserCodeStackTrace();
+      return new StackTraceEvent(result, DEFAULT_LANGUAGE, stackId, EXPLOIT_DETECTED_MSG);
     }
 
     private Powerwaf.ResultWithData doRunPowerwaf(
         AppSecRequestContext reqCtx,
         DataBundle newData,
         CtxAndAddresses ctxAndAddr,
-        boolean isTransient)
+        GatewayContext gwCtx)
         throws AbstractPowerwafException {
 
-      Additive additive = reqCtx.getOrCreateAdditive(ctxAndAddr.ctx, wafMetricsEnabled);
-      PowerwafMetrics metrics = reqCtx.getWafMetrics();
+      Additive additive =
+          reqCtx.getOrCreateAdditive(ctxAndAddr.ctx, wafMetricsEnabled, gwCtx.isRasp);
+      PowerwafMetrics metrics;
+      if (gwCtx.isRasp) {
+        metrics = reqCtx.getRaspMetrics();
+        reqCtx.getRaspMetricsCounter().incrementAndGet();
+      } else {
+        metrics = reqCtx.getWafMetrics();
+      }
 
-      if (isTransient) {
+      if (gwCtx.isTransient) {
         return runPowerwafTransient(additive, metrics, newData, ctxAndAddr);
       } else {
         return runPowerwafAdditive(additive, metrics, newData, ctxAndAddr);

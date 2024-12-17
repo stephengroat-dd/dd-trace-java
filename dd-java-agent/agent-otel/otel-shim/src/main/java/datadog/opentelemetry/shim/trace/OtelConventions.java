@@ -1,6 +1,13 @@
 package datadog.opentelemetry.shim.trace;
 
+import static datadog.opentelemetry.shim.trace.OtelSpanEvent.EXCEPTION_MESSAGE_ATTRIBUTE_KEY;
+import static datadog.opentelemetry.shim.trace.OtelSpanEvent.EXCEPTION_STACK_TRACE_ATTRIBUTE_KEY;
+import static datadog.opentelemetry.shim.trace.OtelSpanEvent.EXCEPTION_TYPE_ATTRIBUTE_KEY;
 import static datadog.trace.api.DDTags.ANALYTICS_SAMPLE_RATE;
+import static datadog.trace.api.DDTags.ERROR_MSG;
+import static datadog.trace.api.DDTags.ERROR_STACK;
+import static datadog.trace.api.DDTags.ERROR_TYPE;
+import static datadog.trace.api.DDTags.SPAN_EVENTS;
 import static datadog.trace.bootstrap.instrumentation.api.Tags.SPAN_KIND;
 import static datadog.trace.bootstrap.instrumentation.api.Tags.SPAN_KIND_CLIENT;
 import static datadog.trace.bootstrap.instrumentation.api.Tags.SPAN_KIND_CONSUMER;
@@ -15,9 +22,12 @@ import static java.lang.Boolean.parseBoolean;
 import static java.util.Locale.ROOT;
 
 import datadog.trace.bootstrap.instrumentation.api.AgentSpan;
+import datadog.trace.bootstrap.instrumentation.api.SpanAttributes;
 import datadog.trace.bootstrap.instrumentation.api.Tags;
 import io.opentelemetry.api.common.AttributeKey;
+import io.opentelemetry.api.common.Attributes;
 import io.opentelemetry.api.trace.SpanKind;
+import java.util.List;
 import javax.annotation.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -122,6 +132,20 @@ public final class OtelConventions {
     }
   }
 
+  public static void setEventsAsTag(AgentSpan span, List<OtelSpanEvent> events) {
+    if (events == null || events.isEmpty()) {
+      return;
+    }
+    span.setTag(SPAN_EVENTS, OtelSpanEvent.toTag(events));
+  }
+
+  public static void applySpanEventExceptionAttributesAsTags(
+      AgentSpan span, Attributes exceptionAttributes) {
+    span.setTag(ERROR_MSG, exceptionAttributes.get(EXCEPTION_MESSAGE_ATTRIBUTE_KEY));
+    span.setTag(ERROR_TYPE, exceptionAttributes.get(EXCEPTION_TYPE_ATTRIBUTE_KEY));
+    span.setTag(ERROR_STACK, exceptionAttributes.get(EXCEPTION_STACK_TRACE_ATTRIBUTE_KEY));
+  }
+
   private static String computeOperationName(AgentSpan span) {
     Object spanKingTag = span.getTag(SPAN_KIND);
     SpanKind spanKind =
@@ -223,5 +247,47 @@ public final class OtelConventions {
       return key;
     }
     return (String) tag;
+  }
+
+  public static AgentSpan.Attributes convertAttributes(Attributes attributes) {
+    if (attributes.isEmpty()) {
+      return SpanAttributes.EMPTY;
+    }
+    SpanAttributes.Builder builder = SpanAttributes.builder();
+    attributes.forEach(
+        (attributeKey, value) -> {
+          String key = attributeKey.getKey();
+          switch (attributeKey.getType()) {
+            case STRING:
+              builder.put(key, (String) value);
+              break;
+            case BOOLEAN:
+              builder.put(key, (boolean) value);
+              break;
+            case LONG:
+              builder.put(key, (long) value);
+              break;
+            case DOUBLE:
+              builder.put(key, (double) value);
+              break;
+            case STRING_ARRAY:
+              //noinspection unchecked
+              builder.putStringArray(key, (List<String>) value);
+              break;
+            case BOOLEAN_ARRAY:
+              //noinspection unchecked
+              builder.putBooleanArray(key, (List<Boolean>) value);
+              break;
+            case LONG_ARRAY:
+              //noinspection unchecked
+              builder.putLongArray(key, (List<Long>) value);
+              break;
+            case DOUBLE_ARRAY:
+              //noinspection unchecked
+              builder.putDoubleArray(key, (List<Double>) value);
+              break;
+          }
+        });
+    return builder.build();
   }
 }

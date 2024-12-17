@@ -11,7 +11,6 @@ import static datadog.trace.core.propagation.HttpCodec.X_CLIENT_IP_KEY;
 import static datadog.trace.core.propagation.HttpCodec.X_CLUSTER_CLIENT_IP_KEY;
 import static datadog.trace.core.propagation.HttpCodec.X_FORWARDED_FOR_KEY;
 import static datadog.trace.core.propagation.HttpCodec.X_FORWARDED_HOST_KEY;
-import static datadog.trace.core.propagation.HttpCodec.X_FORWARDED_KEY;
 import static datadog.trace.core.propagation.HttpCodec.X_FORWARDED_PORT_KEY;
 import static datadog.trace.core.propagation.HttpCodec.X_FORWARDED_PROTO_KEY;
 import static datadog.trace.core.propagation.HttpCodec.X_REAL_IP_KEY;
@@ -32,6 +31,10 @@ import java.util.Collections;
 import java.util.Map;
 import java.util.TreeMap;
 
+/**
+ * When adding new context fields to the ContextInterpreter class remember to clear them in the
+ * reset() method.
+ */
 public abstract class ContextInterpreter implements AgentPropagation.KeyClassifier {
   private TraceConfig traceConfig;
 
@@ -116,10 +119,6 @@ public abstract class ContextInterpreter implements AgentPropagation.KeyClassifi
     }
     if (X_FORWARDED_PORT_KEY.equalsIgnoreCase(key)) {
       getHeaders().xForwardedPort = value;
-      return true;
-    }
-    if (X_FORWARDED_KEY.equalsIgnoreCase(key)) {
-      getHeaders().xForwarded = value;
       return true;
     }
     return false;
@@ -235,6 +234,8 @@ public abstract class ContextInterpreter implements AgentPropagation.KeyClassifi
             || this.clientIpResolutionEnabled && ActiveSubsystems.APPSEC_ACTIVE;
     headerTags = traceConfig.getRequestHeaderTags();
     baggageMapping = traceConfig.getBaggageMapping();
+    propagationTags = null;
+    lastParentId = null;
     return this;
   }
 
@@ -268,7 +269,8 @@ public abstract class ContextInterpreter implements AgentPropagation.KeyClassifi
             baggage,
             samplingPriorityOrDefault(traceId, samplingPriority),
             traceConfig,
-            style());
+            style(),
+            DDTraceId.ZERO);
       }
     }
     return null;

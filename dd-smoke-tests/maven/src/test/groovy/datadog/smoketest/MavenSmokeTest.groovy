@@ -66,9 +66,11 @@ class MavenSmokeTest extends CiVisibilitySmokeTest {
 
     mockBackend.givenFlakyRetries(flakyRetries)
     mockBackend.givenFlakyTest("Maven Smoke Tests Project maven-surefire-plugin default-test", "datadog.smoke.TestFailed", "test_failed")
-    mockBackend.givenSkippableTest("Maven Smoke Tests Project maven-surefire-plugin default-test", "datadog.smoke.TestSucceed", "test_to_skip_with_itr")
 
-    def exitCode = whenRunningMavenBuild(jacocoCoverage)
+    mockBackend.givenTestsSkipping(testsSkipping)
+    mockBackend.givenSkippableTest("Maven Smoke Tests Project maven-surefire-plugin default-test", "datadog.smoke.TestSucceed", "test_to_skip_with_itr", ["src/main/java/datadog/smoke/Calculator.java": bits(9)])
+
+    def exitCode = whenRunningMavenBuild(jacocoCoverage, commandLineParams)
 
     if (expectSuccess) {
       assert exitCode == 0
@@ -80,20 +82,25 @@ class MavenSmokeTest extends CiVisibilitySmokeTest {
     verifyTelemetryMetrics(mockBackend.getAllReceivedTelemetryMetrics(), mockBackend.getAllReceivedTelemetryDistributions(), expectedEvents)
 
     where:
-    projectName                                         | mavenVersion         | expectedEvents | expectedCoverages | expectSuccess | flakyRetries | jacocoCoverage | minSupportedJavaVersion
-    "test_successful_maven_run"                         | "3.2.1"              | 5              | 1                 | true          | false        | true           | 8
-    "test_successful_maven_run"                         | "3.5.4"              | 5              | 1                 | true          | false        | true           | 8
-    "test_successful_maven_run"                         | "3.6.3"              | 5              | 1                 | true          | false        | true           | 8
-    "test_successful_maven_run"                         | "3.8.8"              | 5              | 1                 | true          | false        | true           | 8
-    "test_successful_maven_run"                         | "3.9.7"              | 5              | 1                 | true          | false        | true           | 8
-    "test_successful_maven_run_surefire_3_0_0"          | "3.9.7"              | 5              | 1                 | true          | false        | true           | 8
-    "test_successful_maven_run_surefire_3_0_0"          | LATEST_MAVEN_VERSION | 5              | 1                 | true          | false        | true           | 17
-    "test_successful_maven_run_builtin_coverage"        | "3.9.7"              | 5              | 1                 | true          | false        | false          | 8
-    "test_successful_maven_run_with_jacoco_and_argline" | "3.9.7"              | 5              | 1                 | true          | false        | true           | 8
+    projectName                                         | mavenVersion         | expectedEvents | expectedCoverages | expectSuccess | testsSkipping | flakyRetries | jacocoCoverage | commandLineParams                                              | minSupportedJavaVersion
+    "test_successful_maven_run"                         | "3.2.1"              | 5              | 1                 | true          | true          | false        | true           | []                                                             | 8
+    "test_successful_maven_run"                         | "3.5.4"              | 5              | 1                 | true          | true          | false        | true           | []                                                             | 8
+    "test_successful_maven_run"                         | "3.6.3"              | 5              | 1                 | true          | true          | false        | true           | []                                                             | 8
+    "test_successful_maven_run"                         | "3.8.8"              | 5              | 1                 | true          | true          | false        | true           | []                                                             | 8
+    "test_successful_maven_run"                         | "3.9.9"              | 5              | 1                 | true          | true          | false        | true           | []                                                             | 8
+    "test_successful_maven_run_surefire_3_0_0"          | "3.9.9"              | 5              | 1                 | true          | true          | false        | true           | []                                                             | 8
+    "test_successful_maven_run_surefire_3_0_0"          | LATEST_MAVEN_VERSION | 5              | 1                 | true          | true          | false        | true           | []                                                             | 17
+    "test_successful_maven_run_surefire_3_5_0"          | "3.9.9"              | 5              | 1                 | true          | true          | false        | true           | []                                                             | 8
+    "test_successful_maven_run_surefire_3_5_0"          | LATEST_MAVEN_VERSION | 5              | 1                 | true          | true          | false        | true           | []                                                             | 17
+    "test_successful_maven_run_builtin_coverage"        | "3.9.9"              | 5              | 1                 | true          | true          | false        | false          | []                                                             | 8
+    "test_successful_maven_run_with_jacoco_and_argline" | "3.9.9"              | 5              | 1                 | true          | true          | false        | true           | []                                                             | 8
     // "expectedEvents" count for this test case does not include the spans that correspond to Cucumber steps
-    "test_successful_maven_run_with_cucumber"           | "3.9.7"              | 4              | 1                 | true          | false        | true           | 8
-    "test_failed_maven_run_flaky_retries"               | "3.9.7"              | 8              | 5                 | false         | true         | true           | 8
-    "test_successful_maven_run_junit_platform_runner"   | "3.9.7"              | 4              | 0                 | true          | false        | false          | 8
+    "test_successful_maven_run_with_cucumber"           | "3.9.9"              | 4              | 1                 | true          | false         | false        | true           | []                                                             | 8
+    "test_failed_maven_run_flaky_retries"               | "3.9.9"              | 8              | 5                 | false         | false         | true         | true           | []                                                             | 8
+    "test_successful_maven_run_junit_platform_runner"   | "3.9.9"              | 4              | 0                 | true          | false         | false        | false          | []                                                             | 8
+    "test_successful_maven_run_with_arg_line_property"  | "3.9.9"              | 4              | 0                 | true          | false         | false        | false          | ["-DargLine='-Dmy-custom-property=provided-via-command-line'"] | 8
+    "test_successful_maven_run_multiple_forks"          | "3.9.9"              | 5              | 1                 | true          | true          | false        | true           | []                                                             | 8
+    "test_successful_maven_run_multiple_forks"          | LATEST_MAVEN_VERSION | 5              | 1                 | true          | true          | false        | true           | []                                                             | 17
   }
 
   private void givenWrapperPropertiesFile(String mavenVersion) {
@@ -169,15 +176,15 @@ class MavenSmokeTest extends CiVisibilitySmokeTest {
     throw new AssertionError((Object) "Tried $DEPENDENCIES_DOWNLOAD_RETRIES times to execute $mvnCommand and failed")
   }
 
-  private int whenRunningMavenBuild(boolean injectJacoco) {
-    def processBuilder = createProcessBuilder(["-B", "test"], true, injectJacoco)
+  private int whenRunningMavenBuild(boolean injectJacoco, List<String> additionalCommandLineParams) {
+    def processBuilder = createProcessBuilder(["-B", "test"] + additionalCommandLineParams, true, injectJacoco)
 
     processBuilder.environment().put("DD_API_KEY", "01234567890abcdef123456789ABCDEF")
 
     return runProcess(processBuilder.start())
   }
 
-  private runProcess(Process p) {
+  private static runProcess(Process p) {
     StreamConsumer errorGobbler = new StreamConsumer(p.getErrorStream(), "ERROR")
     StreamConsumer outputGobbler = new StreamConsumer(p.getInputStream(), "OUTPUT")
     outputGobbler.start()
@@ -237,16 +244,13 @@ class MavenSmokeTest extends CiVisibilitySmokeTest {
         "${Strings.propertyNameToSystemPropertyName(CiVisibilityConfig.CIVISIBILITY_ENABLED)}=true," +
         "${Strings.propertyNameToSystemPropertyName(CiVisibilityConfig.CIVISIBILITY_AGENTLESS_ENABLED)}=true," +
         "${Strings.propertyNameToSystemPropertyName(CiVisibilityConfig.CIVISIBILITY_CIPROVIDER_INTEGRATION_ENABLED)}=false," +
-        "${Strings.propertyNameToSystemPropertyName(CiVisibilityConfig.CIVISIBILITY_SOURCE_DATA_ROOT_CHECK_ENABLED)}=false," +
         "${Strings.propertyNameToSystemPropertyName(CiVisibilityConfig.CIVISIBILITY_GIT_UPLOAD_ENABLED)}=false," +
         "${Strings.propertyNameToSystemPropertyName(CiVisibilityConfig.CIVISIBILITY_COMPILER_PLUGIN_VERSION)}=${JAVAC_PLUGIN_VERSION}," +
         "${Strings.propertyNameToSystemPropertyName(CiVisibilityConfig.CIVISIBILITY_AGENTLESS_URL)}=${mockBackend.intakeUrl}," +
         "${Strings.propertyNameToSystemPropertyName(CiVisibilityConfig.CIVISIBILITY_FLAKY_RETRY_ONLY_KNOWN_FLAKES)}=true,"
-      // to cover flaky test retrieval logic
 
       if (injectJacoco) {
-        agentArgument += "${Strings.propertyNameToSystemPropertyName(CiVisibilityConfig.CIVISIBILITY_CODE_COVERAGE_SEGMENTS_ENABLED)}=true," +
-          "${Strings.propertyNameToSystemPropertyName(CiVisibilityConfig.CIVISIBILITY_JACOCO_PLUGIN_VERSION)}=${JACOCO_PLUGIN_VERSION},"
+        agentArgument += "${Strings.propertyNameToSystemPropertyName(CiVisibilityConfig.CIVISIBILITY_JACOCO_PLUGIN_VERSION)}=${JACOCO_PLUGIN_VERSION},"
       }
 
       arguments += agentArgument.toString()
@@ -294,7 +298,7 @@ class MavenSmokeTest extends CiVisibilitySmokeTest {
         NodeList versionList = doc.getElementsByTagName("latest")
         if (versionList.getLength() > 0) {
           def version = versionList.item(0).getTextContent()
-          if (!version.contains('alpha') && !version.contains('beta')) {
+          if (!version.contains('alpha') && !version.contains('beta') && !version.contains('rc')) {
             LOGGER.info("Will run the 'latest' tests with version ${version}")
             return version
           }
@@ -308,5 +312,13 @@ class MavenSmokeTest extends CiVisibilitySmokeTest {
     def hardcodedLatestVersion = "4.0.0-beta-3" // latest version that is known to work
     LOGGER.info("Will run the 'latest' tests with hard-coded version ${hardcodedLatestVersion}")
     return hardcodedLatestVersion
+  }
+
+  private static BitSet bits(int ... indices) {
+    BitSet bitSet = new BitSet()
+    for (int i : indices) {
+      bitSet.set(i)
+    }
+    return bitSet
   }
 }

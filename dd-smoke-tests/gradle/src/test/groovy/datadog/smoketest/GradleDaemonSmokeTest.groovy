@@ -1,51 +1,31 @@
 package datadog.smoketest
 
-import com.fasterxml.jackson.databind.JsonNode
-import com.fasterxml.jackson.databind.ObjectMapper
+
 import datadog.trace.api.Config
 import datadog.trace.api.Platform
 import datadog.trace.api.config.CiVisibilityConfig
 import datadog.trace.api.config.GeneralConfig
-import datadog.trace.civisibility.CiVisibilitySmokeTest
 import datadog.trace.util.Strings
-import okhttp3.OkHttpClient
-import okhttp3.Request
-import okhttp3.Response
-import org.gradle.internal.impldep.org.apache.commons.io.FileUtils
 import org.gradle.testkit.runner.BuildResult
 import org.gradle.testkit.runner.GradleRunner
 import org.gradle.testkit.runner.TaskOutcome
 import org.gradle.util.DistributionLocator
 import org.gradle.util.GradleVersion
 import org.gradle.wrapper.Download
-import org.gradle.wrapper.GradleUserHomeLookup
 import org.gradle.wrapper.Install
 import org.gradle.wrapper.PathAssembler
 import org.gradle.wrapper.WrapperConfiguration
-import org.junit.jupiter.api.Assumptions
-import spock.lang.AutoCleanup
 import spock.lang.IgnoreIf
 import spock.lang.Shared
 import spock.lang.TempDir
-import spock.util.environment.Jvm
 
-import java.nio.file.FileVisitResult
 import java.nio.file.Files
 import java.nio.file.Path
-import java.nio.file.Paths
-import java.nio.file.SimpleFileVisitor
-import java.nio.file.attribute.BasicFileAttributes
 
-class GradleDaemonSmokeTest extends CiVisibilitySmokeTest {
-
-  private static final String LATEST_GRADLE_VERSION = getLatestGradleVersion()
+class GradleDaemonSmokeTest extends AbstractGradleTest {
 
   private static final String TEST_SERVICE_NAME = "test-gradle-service"
   private static final String TEST_ENVIRONMENT_NAME = "integration-test"
-
-  // test resources use this instead of ".gradle" to avoid unwanted evaluation
-  private static final String GRADLE_TEST_RESOURCE_EXTENSION = ".gradleTest"
-  private static final String GRADLE_REGULAR_EXTENSION = ".gradle"
 
   private static final int GRADLE_DISTRIBUTION_NETWORK_TIMEOUT = 30_000 // Gradle's default timeout is 10s
 
@@ -58,36 +38,25 @@ class GradleDaemonSmokeTest extends CiVisibilitySmokeTest {
   @TempDir
   Path testKitFolder
 
-  @TempDir
-  Path projectFolder
-
-  @Shared
-  @AutoCleanup
-  MockBackend mockBackend = new MockBackend()
-
   def setupSpec() {
     givenGradleProperties()
-  }
-
-  def setup() {
-    mockBackend.reset()
   }
 
   @IgnoreIf(reason = "Jacoco plugin does not work with OpenJ9 in older Gradle versions", value = {
     Platform.isJ9()
   })
-  def "test legacy #projectName, v#gradleVersion, configCache: #configurationCache"() {
-    runGradleTest(gradleVersion, projectName, configurationCache, successExpected, flakyRetries, expectedTraces, expectedCoverages)
+  def "test legacy #projectName, v#gradleVersion"() {
+    runGradleTest(gradleVersion, projectName, false, successExpected, false, expectedTraces, expectedCoverages)
 
     where:
-    gradleVersion         | projectName                                        | configurationCache | successExpected | flakyRetries | expectedTraces | expectedCoverages
-    "3.0"                 | "test-succeed-old-gradle"                          | false              | true            | false        | 5              | 1
-    "7.6.4"               | "test-succeed-legacy-instrumentation"              | false              | true            | false        | 5              | 1
-    "7.6.4"               | "test-succeed-multi-module-legacy-instrumentation" | false              | true            | false        | 7              | 2
-    "7.6.4"               | "test-succeed-multi-forks-legacy-instrumentation"  | false              | true            | false        | 6              | 2
-    "7.6.4"               | "test-skip-legacy-instrumentation"                 | false              | true            | false        | 2              | 0
-    "7.6.4"               | "test-failed-legacy-instrumentation"               | false              | false           | false        | 4              | 0
-    "7.6.4"               | "test-corrupted-config-legacy-instrumentation"     | false              | false           | false        | 1              | 0
+    gradleVersion         | projectName                                        | successExpected | expectedTraces | expectedCoverages
+    "3.0"                 | "test-succeed-old-gradle"                          | true            | 5              | 1
+    "7.6.4"               | "test-succeed-legacy-instrumentation"              | true            | 5              | 1
+    "7.6.4"               | "test-succeed-multi-module-legacy-instrumentation" | true            | 7              | 2
+    "7.6.4"               | "test-succeed-multi-forks-legacy-instrumentation"  | true            | 6              | 2
+    "7.6.4"               | "test-skip-legacy-instrumentation"                 | true            | 2              | 0
+    "7.6.4"               | "test-failed-legacy-instrumentation"               | false           | 4              | 0
+    "7.6.4"               | "test-corrupted-config-legacy-instrumentation"     | false           | 1              | 0
   }
 
   def "test #projectName, v#gradleVersion, configCache: #configurationCache"() {
@@ -96,8 +65,10 @@ class GradleDaemonSmokeTest extends CiVisibilitySmokeTest {
     where:
     gradleVersion         | projectName                                        | configurationCache | successExpected | flakyRetries | expectedTraces | expectedCoverages
     "8.3"                 | "test-succeed-new-instrumentation"                 | false              | true            | false        | 5              | 1
+    "8.9"                 | "test-succeed-new-instrumentation"                 | false              | true            | false        | 5              | 1
     LATEST_GRADLE_VERSION | "test-succeed-new-instrumentation"                 | false              | true            | false        | 5              | 1
     "8.3"                 | "test-succeed-new-instrumentation"                 | true               | true            | false        | 5              | 1
+    "8.9"                 | "test-succeed-new-instrumentation"                 | true               | true            | false        | 5              | 1
     LATEST_GRADLE_VERSION | "test-succeed-new-instrumentation"                 | true               | true            | false        | 5              | 1
     LATEST_GRADLE_VERSION | "test-succeed-multi-module-new-instrumentation"    | false              | true            | false        | 7              | 2
     LATEST_GRADLE_VERSION | "test-succeed-multi-forks-new-instrumentation"     | false              | true            | false        | 6              | 2
@@ -116,7 +87,9 @@ class GradleDaemonSmokeTest extends CiVisibilitySmokeTest {
 
     mockBackend.givenFlakyRetries(flakyRetries)
     mockBackend.givenFlakyTest(":test", "datadog.smoke.TestFailed", "test_failed")
-    mockBackend.givenSkippableTest(":test", "datadog.smoke.TestSucceed", "test_to_skip_with_itr")
+
+    mockBackend.givenTestsSkipping(true)
+    mockBackend.givenSkippableTest(":test", "datadog.smoke.TestSucceed", "test_to_skip_with_itr", [:])
 
     BuildResult buildResult = runGradleTests(gradleVersion, successExpected, configurationCache)
 
@@ -159,38 +132,14 @@ class GradleDaemonSmokeTest extends CiVisibilitySmokeTest {
       "${Strings.propertyNameToSystemPropertyName(CiVisibilityConfig.CIVISIBILITY_GIT_UPLOAD_ENABLED)}=false," +
       "${Strings.propertyNameToSystemPropertyName(CiVisibilityConfig.CIVISIBILITY_CIPROVIDER_INTEGRATION_ENABLED)}=false," +
       "${Strings.propertyNameToSystemPropertyName(CiVisibilityConfig.CIVISIBILITY_JACOCO_PLUGIN_VERSION)}=$JACOCO_PLUGIN_VERSION," +
-      "${Strings.propertyNameToSystemPropertyName(CiVisibilityConfig.CIVISIBILITY_CODE_COVERAGE_SEGMENTS_ENABLED)}=true," +
       "${Strings.propertyNameToSystemPropertyName(CiVisibilityConfig.CIVISIBILITY_AGENTLESS_URL)}=${mockBackend.intakeUrl}"
 
     Files.write(testKitFolder.resolve("gradle.properties"), gradleProperties.getBytes())
   }
 
-  private void givenGradleProjectFiles(String projectFilesSources) {
-    def projectResourcesUri = this.getClass().getClassLoader().getResource(projectFilesSources).toURI()
-    def projectResourcesPath = Paths.get(projectResourcesUri)
-    FileUtils.copyDirectory(projectResourcesPath.toFile(), projectFolder.toFile())
-
-    Files.walkFileTree(projectFolder, new SimpleFileVisitor<Path>() {
-        @Override
-        FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
-          if (file.toString().endsWith(GRADLE_TEST_RESOURCE_EXTENSION)) {
-            def fileWithFixedExtension = Paths.get(file.toString().replace(GRADLE_TEST_RESOURCE_EXTENSION, GRADLE_REGULAR_EXTENSION))
-            Files.move(file, fileWithFixedExtension)
-          }
-          return FileVisitResult.CONTINUE
-        }
-      })
-
-    // creating empty .git directory so that the tracer could detect projectFolder as repo root
-    Files.createDirectory(projectFolder.resolve(".git"))
-  }
-
   private BuildResult runGradleTests(String gradleVersion, boolean successExpected = true, boolean configurationCache = false) {
     def arguments = ["test", "--stacktrace"]
-    if (gradleVersion > "5.6") {
-      // fail on warnings is available starting from Gradle 5.6
-      arguments += ["--warning-mode", "fail"]
-    } else if (gradleVersion > "4.5") {
+    if (gradleVersion > "4.5") {
       // warning mode available starting from Gradle 4.5
       arguments += ["--warning-mode", "all"]
     }
@@ -253,65 +202,6 @@ class GradleDaemonSmokeTest extends CiVisibilitySmokeTest {
     assert buildResult.tasks.size() > 0
     for (def task : buildResult.tasks) {
       assert task.outcome != TaskOutcome.FAILED
-    }
-  }
-
-  void givenGradleVersionIsCompatibleWithCurrentJvm(String gradleVersion) {
-    Assumptions.assumeTrue(isSupported(gradleVersion),
-      "Current JVM " + Jvm.current.javaVersion + " does not support Gradle version " + gradleVersion)
-  }
-
-  private static boolean isSupported(String gradleVersion) {
-    // https://docs.gradle.org/current/userguide/compatibility.html
-    if (Jvm.current.java21Compatible) {
-      return gradleVersion >= "8.4"
-    } else if (Jvm.current.java20) {
-      return gradleVersion >= "8.1"
-    } else if (Jvm.current.java19) {
-      return gradleVersion >= "7.6"
-    } else if (Jvm.current.java18) {
-      return gradleVersion >= "7.5"
-    } else if (Jvm.current.java17) {
-      return gradleVersion >= "7.3"
-    } else if (Jvm.current.java16) {
-      return gradleVersion >= "7.0"
-    } else if (Jvm.current.java15) {
-      return gradleVersion >= "6.7"
-    } else if (Jvm.current.java14) {
-      return gradleVersion >= "6.3"
-    } else if (Jvm.current.java13) {
-      return gradleVersion >= "6.0"
-    } else if (Jvm.current.java12) {
-      return gradleVersion >= "5.4"
-    } else if (Jvm.current.java11) {
-      return gradleVersion >= "5.0"
-    } else if (Jvm.current.java10) {
-      return gradleVersion >= "4.7"
-    } else if (Jvm.current.java9) {
-      return gradleVersion >= "4.3"
-    } else if (Jvm.current.java8) {
-      return gradleVersion >= "2.0"
-    }
-    return false
-  }
-
-  void givenConfigurationCacheIsCompatibleWithCurrentPlatform(boolean configurationCacheEnabled) {
-    if (configurationCacheEnabled) {
-      Assumptions.assumeFalse(Platform.isIbm8(), "Configuration cache is not compatible with IBM 8")
-    }
-  }
-
-  private static String getLatestGradleVersion() {
-    OkHttpClient client = new OkHttpClient()
-    Request request = new Request.Builder().url("https://services.gradle.org/versions/current").build()
-    try (Response response = client.newCall(request).execute()) {
-      if (!response.successful) {
-        return GradleVersion.current().version
-      }
-      def responseBody = response.body().string()
-      ObjectMapper mapper = new ObjectMapper()
-      JsonNode root = mapper.readTree(responseBody)
-      return root.get("version").asText()
     }
   }
 }

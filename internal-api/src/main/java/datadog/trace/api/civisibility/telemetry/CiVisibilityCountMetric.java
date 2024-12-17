@@ -1,5 +1,6 @@
 package datadog.trace.api.civisibility.telemetry;
 
+import datadog.trace.api.civisibility.telemetry.tag.AgentlessLogSubmissionEnabled;
 import datadog.trace.api.civisibility.telemetry.tag.AutoInjected;
 import datadog.trace.api.civisibility.telemetry.tag.BrowserDriver;
 import datadog.trace.api.civisibility.telemetry.tag.Command;
@@ -11,15 +12,17 @@ import datadog.trace.api.civisibility.telemetry.tag.Endpoint;
 import datadog.trace.api.civisibility.telemetry.tag.ErrorType;
 import datadog.trace.api.civisibility.telemetry.tag.EventType;
 import datadog.trace.api.civisibility.telemetry.tag.ExitCode;
+import datadog.trace.api.civisibility.telemetry.tag.FailFastTestOrderEnabled;
+import datadog.trace.api.civisibility.telemetry.tag.FlakyTestRetriesEnabled;
 import datadog.trace.api.civisibility.telemetry.tag.HasCodeowner;
 import datadog.trace.api.civisibility.telemetry.tag.IsBenchmark;
 import datadog.trace.api.civisibility.telemetry.tag.IsHeadless;
 import datadog.trace.api.civisibility.telemetry.tag.IsNew;
+import datadog.trace.api.civisibility.telemetry.tag.IsRetry;
 import datadog.trace.api.civisibility.telemetry.tag.IsRum;
 import datadog.trace.api.civisibility.telemetry.tag.IsUnsupportedCI;
 import datadog.trace.api.civisibility.telemetry.tag.ItrEnabled;
 import datadog.trace.api.civisibility.telemetry.tag.ItrSkipEnabled;
-import datadog.trace.api.civisibility.telemetry.tag.Library;
 import datadog.trace.api.civisibility.telemetry.tag.Provider;
 import datadog.trace.api.civisibility.telemetry.tag.RequestCompressed;
 import datadog.trace.api.civisibility.telemetry.tag.RequireGit;
@@ -33,7 +36,12 @@ public enum CiVisibilityCountMetric {
    * The number of test sessions started. This metric is separate from event_created to avoid
    * increasing the cardinality too much
    */
-  TEST_SESSION("test_session", Provider.class, AutoInjected.class),
+  TEST_SESSION(
+      "test_session",
+      Provider.class,
+      AutoInjected.class,
+      AgentlessLogSubmissionEnabled.class,
+      FailFastTestOrderEnabled.class),
   /** The number of events created */
   EVENT_CREATED(
       "event_created",
@@ -54,19 +62,9 @@ public enum CiVisibilityCountMetric {
       IsBenchmark.class,
       EarlyFlakeDetectionAbortReason.class,
       IsNew.class,
+      IsRetry.class,
       IsRum.class,
       BrowserDriver.class),
-  /**
-   * The number of per-test code coverage sessions started (each test case counts as a separate
-   * session)
-   */
-  CODE_COVERAGE_STARTED("code_coverage_started", TestFrameworkInstrumentation.class, Library.class),
-  /**
-   * The number of per-test code coverage sessions finished (each test case counts as a separate
-   * session)
-   */
-  CODE_COVERAGE_FINISHED(
-      "code_coverage_finished", TestFrameworkInstrumentation.class, Library.class),
   /** The number of successfully collected code coverages that are empty */
   CODE_COVERAGE_IS_EMPTY("code_coverage.is_empty"),
   /** The number of errors while processing code coverage */
@@ -107,6 +105,7 @@ public enum CiVisibilityCountMetric {
       ItrSkipEnabled.class,
       CoverageEnabled.class,
       EarlyFlakeDetectionEnabled.class,
+      FlakyTestRetriesEnabled.class,
       RequireGit.class),
   /** The number of requests sent to the itr skippable tests endpoint */
   ITR_SKIPPABLE_TESTS_REQUEST("itr_skippable_tests.request", RequestCompressed.class),
@@ -126,8 +125,12 @@ public enum CiVisibilityCountMetric {
   ITR_FORCED_RUN("itr_forced_run", EventType.class),
   /** The number of requests sent to the known tests endpoint */
   EFD_REQUEST("early_flake_detection.request", RequestCompressed.class),
-  /** The number of known tests requests sent to the endpoint that errored */
-  EFD_REQUEST_ERRORS("early_flake_detection.request_errors", ErrorType.class, StatusCode.class);
+  /** The number of known tests requests sent to the known tests endpoint that errored */
+  EFD_REQUEST_ERRORS("early_flake_detection.request_errors", ErrorType.class, StatusCode.class),
+  /** The number of requests sent to the flaky tests endpoint */
+  FLAKY_TESTS_REQUEST("flaky_tests.request", RequestCompressed.class),
+  /** The number of known tests requests sent to the flaky tests that errored */
+  FLAKY_TESTS_REQUEST_ERRORS("flaky_tests.request_errors", ErrorType.class, StatusCode.class);
 
   // need a "holder" class, as accessing static fields from enum constructors is illegal
   static class IndexHolder {
