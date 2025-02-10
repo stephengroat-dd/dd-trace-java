@@ -18,7 +18,7 @@ import org.spockframework.runtime.SpockEngine;
 
 @AutoService(InstrumenterModule.class)
 public class JUnit5SpockInstrumentation extends InstrumenterModule.CiVisibility
-    implements Instrumenter.ForSingleType {
+    implements Instrumenter.ForSingleType, Instrumenter.HasMethodAdvice {
 
   public JUnit5SpockInstrumentation() {
     super("ci-visibility", "junit-5", "junit-5-spock");
@@ -38,7 +38,7 @@ public class JUnit5SpockInstrumentation extends InstrumenterModule.CiVisibility
   public String[] helperClassNames() {
     return new String[] {
       packageName + ".JUnitPlatformUtils",
-      packageName + ".TestIdentifierFactory",
+      packageName + ".TestDataFactory",
       packageName + ".SpockUtils",
       packageName + ".TestEventsHandlerHolder",
       packageName + ".SpockTracingListener",

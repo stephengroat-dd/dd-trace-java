@@ -18,7 +18,7 @@ import org.junit.platform.engine.support.hierarchical.SameThreadHierarchicalTest
 
 @AutoService(InstrumenterModule.class)
 public class JUnit5CucumberInstrumentation extends InstrumenterModule.CiVisibility
-    implements Instrumenter.ForSingleType {
+    implements Instrumenter.ForSingleType, Instrumenter.HasMethodAdvice {
 
   public JUnit5CucumberInstrumentation() {
     super("ci-visibility", "junit-5", "junit-5-cucumber");
@@ -37,7 +37,7 @@ public class JUnit5CucumberInstrumentation extends InstrumenterModule.CiVisibili
   @Override
   public String[] helperClassNames() {
     return new String[] {
-      packageName + ".TestIdentifierFactory",
+      packageName + ".TestDataFactory",
       packageName + ".JUnitPlatformUtils",
       packageName + ".CucumberUtils",
       packageName + ".TestEventsHandlerHolder",
